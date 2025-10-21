@@ -1,0 +1,41 @@
+model_name: "t5-base"
+device: "auto"   # prefers cuda on Colab
+seed: 42
+
+io:
+  out_dir: "outputs"
+
+train:
+  epochs: 1
+  max_steps: 2000
+  batch_size: 4
+  grad_accum: 2
+  lr: 3e-4
+  warmup_steps: 200
+  fp16: true
+
+lora:
+  use_lora: true
+  r: 8
+  alpha: 16
+  target_modules: ["q","k","v","o"]
+
+logic:
+  lambda: 0.2
+  cagrad_c: 0.0
+
+decode:
+  beam_size: 4
+  logic_rerank: true
+  rerank_alpha: 0.2
+  hard_masks: true
+  max_new_tokens: 8
+
+retrieval:
+  enabled: false
+  topk: 3
+
+data:
+  fever_path: "data/fever.tsv"
+  tqa_path: "data/truthfulqa.tsv"
+  cogs_dir: "data/cogs/"

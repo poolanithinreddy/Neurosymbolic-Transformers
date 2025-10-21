@@ -1,0 +1,20 @@
+# K≈20 predicates (subset you can extend)
+- {name: IsPerson,      arity: 1, grounding: kb_or_neural, essential: true}
+- {name: IsCountry,     arity: 1, grounding: kb_or_neural, essential: true}
+- {name: IsCity,        arity: 1, grounding: kb_or_neural, essential: true}
+- {name: IsOrg,         arity: 1, grounding: kb_or_neural, essential: false}
+- {name: IsLocation,    arity: 1, grounding: kb_or_neural, essential: true}
+- {name: TrueClaim,     arity: 1, grounding: neural,       essential: true}
+- {name: FalseClaim,    arity: 1, grounding: neural,       essential: true}
+- {name: Supports,      arity: 2, grounding: neural,       essential: true}
+- {name: Contradicts,   arity: 2, grounding: neural,       essential: true}
+- {name: LocatedIn,     arity: 2, grounding: kb_or_neural, essential: true}
+- {name: CapitalOf,     arity: 2, grounding: kb,           essential: false}
+- {name: BornIn,        arity: 2, grounding: kb_or_neural, essential: false}
+- {name: Occupation,    arity: 2, grounding: kb_or_neural, essential: false}
+- {name: ParentOf,      arity: 2, grounding: synthetic,    essential: false}
+- {name: AncestorOf,    arity: 2, grounding: derived,      essential: false}
+- {name: SameAs,        arity: 2, grounding: neural,       essential: false}
+- {name: Successor,     arity: 2, grounding: deterministic,essential: false}
+- {name: IsEven,        arity: 1, grounding: deterministic,essential: false}
+- {name: PartOf,        arity: 2, grounding: kb_or_neural, essential: false}

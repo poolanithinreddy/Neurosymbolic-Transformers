@@ -1,0 +1,35 @@
+model_name: "t5-small"
+device: "mps"
+seed: 42
+
+io:
+  out_dir: "outputs_quick"
+
+train:
+  epochs: 1
+  max_steps: 12
+  batch_size: 1
+  grad_accum: 1
+  lr: 3e-4
+  fp16: false
+
+lora:
+  use_lora: false
+  r: 8
+  alpha: 16
+  target_modules: ["q","k","v","o"]
+
+logic:
+  lambda: 0.1
+  cagrad_c: 0.0
+
+decode:
+  beam_size: 1
+  logic_rerank: false
+  hard_masks: true
+  max_new_tokens: 8
+
+data:
+  fever_path: "data/fever.tsv"
+  tqa_path: "data/truthfulqa.jsonl"
+  cogs_dir: "data/cogs/"

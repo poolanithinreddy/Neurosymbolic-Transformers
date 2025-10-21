@@ -1,0 +1,19 @@
+torch
+ torchvision
+ torchaudio
+ transformers
+ datasets
+ peft
+ accelerate
+ pyyaml
+ networkx
+ numpy
+ scipy
+ scikit-learn
+ pandas
+ spacy
+ evaluate
+ matplotlib
+ tqdm
+ regex
+ pytest

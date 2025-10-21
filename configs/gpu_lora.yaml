@@ -1,0 +1,35 @@
+model_name: "google/flan-t5-xl"   # or flan-t5-large if VRAM is tight
+device: "cuda"
+seed: 42
+
+io:
+  out_dir: "outputs"
+
+train:
+  epochs: 3
+  max_steps: 0                 # 0 means “use epochs”
+  batch_size: 4
+  grad_accum: 8
+  lr: 2e-5
+  fp16: true
+
+lora:
+  use_lora: true
+  r: 16
+  alpha: 32
+  target_modules: ["q","k","v","o"]
+
+logic:
+  lambda: 0.0       # warmup to 1.0 after 1 epoch
+  cagrad_c: 0.3
+
+decode:
+  beam_size: 4
+  logic_rerank: true
+  hard_masks: true
+  max_new_tokens: 96
+
+data:
+  fever_path: "data/fever.tsv"
+  tqa_path: "data/truthfulqa.jsonl"
+  cogs_dir: "data/cogs/"

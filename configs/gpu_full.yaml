@@ -1,0 +1,43 @@
+model_name: "google/flan-t5-large"
+device: "auto"  # prefers cuda
+seed: 42
+
+io:
+  out_dir: "outputs_full"
+
+train:
+  epochs: 3
+  max_steps: 10000
+  batch_size: 8
+  grad_accum: 4
+  lr: 2e-4
+  warmup_steps: 1000
+  fp16: true
+
+lora:
+  use_lora: true
+  r: 16
+  alpha: 32
+  target_modules: ["q","k","v","o"]
+
+logic:
+  lambda: 0.3
+  cagrad_c: 0.3
+
+decode:
+  beam_size: 4
+  logic_rerank: true
+  rerank_alpha: 0.3
+  hard_masks: true
+  max_new_tokens: 8
+
+retrieval:
+  enabled: false
+  topk: 5
+
+data:
+  fever_path: "data/fever.tsv"
+  tqa_path: "data/truthfulqa.tsv"
+  cogs_dir: "data/cogs/"
+
+# Note: flan-t5-large requires significant GPU memory; consider gradient checkpointing and 8-bit optimizers if OOM.

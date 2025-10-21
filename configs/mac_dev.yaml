@@ -1,0 +1,35 @@
+model_name: "google/flan-t5-large"
+device: "mps"
+seed: 42
+
+io:
+  out_dir: "outputs"
+
+train:
+  epochs: 1
+  max_steps: 1500          # keep small on Mac
+  batch_size: 1
+  grad_accum: 8
+  lr: 3e-5
+  fp16: false
+
+lora:
+  use_lora: true
+  r: 16
+  alpha: 32
+  target_modules: ["q","k","v","o"]  # adapters you’ll map in code
+
+logic:
+  lambda: 0.3       # will warm up from 0 in train.py
+  cagrad_c: 0.3
+
+decode:
+  beam_size: 2
+  logic_rerank: true
+  hard_masks: true
+  max_new_tokens: 64
+
+data:
+  fever_path: "data/fever.tsv"
+  tqa_path: "data/truthfulqa.jsonl"
+  cogs_dir: "data/cogs/"

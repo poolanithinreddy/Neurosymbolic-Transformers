@@ -1,0 +1,47 @@
+# Hard: Person ∧ Country disjoint
+- id: R01
+  hard: true
+  weight: 1.0
+  quant: {forall: ["x"]}
+  body: [{pred: IsPerson, args:["x"]}]
+  head: {pred: Not, args:[{pred: IsCountry, args:["x"]}]}
+
+# Hard: TrueClaim ⇒ ¬FalseClaim
+- id: R02
+  hard: true
+  weight: 1.0
+  quant: {forall: ["c"]}
+  body: [{pred: TrueClaim, args:["c"]}]
+  head: {pred: Not, args:[{pred: FalseClaim, args:["c"]}]}
+
+# Hard: Parity flip on successor
+- id: R03
+  hard: true
+  weight: 0.9
+  quant: {forall: ["n","m"]}
+  body: [{pred: IsEven, args:["n"]},{pred: Successor, args:["n","m"]}]
+  head: {pred: Not, args:[{pred: IsEven, args:["m"]}]}
+
+# Soft: Supports(p,c) ⇒ TrueClaim(c)
+- id: R04
+  hard: false
+  weight: 0.9
+  quant: {forall: ["p","c"]}
+  body: [{pred: Supports, args:["p","c"]}]
+  head: {pred: TrueClaim, args:["c"]}
+
+# Soft: Contradicts(p,c) ⇒ FalseClaim(c)
+- id: R05
+  hard: false
+  weight: 0.9
+  quant: {forall: ["p","c"]}
+  body: [{pred: Contradicts, args:["p","c"]}]
+  head: {pred: FalseClaim, args:["c"]}
+
+# Soft: CapitalOf(c,city) ⇒ LocatedIn(city,c)
+- id: R06
+  hard: false
+  weight: 0.8
+  quant: {forall: ["c","city"]}
+  body: [{pred: CapitalOf, args:["c","city"]}]
+  head: {pred: LocatedIn, args:["city","c"]}

@@ -1,0 +1,37 @@
+__pycache__/
+*.pyc
+.DS_Store
+.venv/
+outputs/
+outputs_quick/
+*.pt
+*.bin
+*.safetensors
+*.ckpt
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+dist/
+build/
+*.egg-info/
+# Python
+__pycache__/
+*.pyc
+.venv/
+.env/
+
+# Outputs
+outputs/
+checkpoints/
+
+# Data artifacts
+*.jsonl
+*.tsv
+*.csv
+
+# OS
+.DS_Store
+
+# Notebooks
+*.ipynb_checkpoints/
