@@ -25,7 +25,7 @@ jobs:
           black -l 100 --check .
       - name: Lint
         run: |
-          ruff .
+          ruff check .
           mypy nst || true
       - name: Test
         run: |
