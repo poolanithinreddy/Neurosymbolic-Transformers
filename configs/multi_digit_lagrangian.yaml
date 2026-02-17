@@ -1,0 +1,22 @@
+# Multi-digit addition — Lagrangian (no CEGIS)
+# Run: python main.py train-multi-digit --config configs/multi_digit_lagrangian.yaml
+
+model:
+  mode: lagrangian
+
+data:
+  n_train: 5000
+  n_test: 2000
+  img_size: 28
+
+training:
+  epochs: 30
+  lr: 1e-3
+  batch_size: 64
+  device: auto
+  seed: 42
+  outdir: outputs_multi_digit_lagrangian
+  lagrangian_epsilon: 0.05
+  lagrangian_alpha: 0.01
+  lagrangian_rho: 1.0
+  lagrangian_lam_max: 10.0

@@ -196,26 +196,93 @@ def premises_to_text(premises: list[tuple[str, str, str]]) -> str:
     return " ".join(parts)
 
 
+def add_distractors(
+    premises: list[tuple[str, str, str]],
+    query: tuple[str, str],
+    rng: random.Random,
+    n_distractors: int = 2,
+) -> list[tuple[str, str, str]]:
+    """Add irrelevant premises that don't affect the answer.
+
+    Distractors use fresh names not in the reasoning chain,
+    making the model distinguish relevant from irrelevant facts.
+    """
+    # Names already used in the chain
+    used_names = set()
+    for a, _, b in premises:
+        used_names.add(a)
+        used_names.add(b)
+    used_names.update(query)
+
+    available = [n for n in _NAMES if n not in used_names]
+    if len(available) < 2 * n_distractors:
+        return premises  # Not enough fresh names
+
+    distractors = []
+    for _ in range(n_distractors):
+        pair = rng.sample(available, k=2)
+        available = [n for n in available if n not in pair]
+        rel = rng.choice(["parent", "child"])
+        distractors.append((pair[0], rel, pair[1]))
+
+    # Interleave distractors randomly among premises
+    combined = list(premises) + distractors
+    rng.shuffle(combined)
+    return combined
+
+
+def corrupt_label(
+    answer: str,
+    rng: random.Random,
+    corruption_rate: float = 0.1,
+) -> str:
+    """With probability corruption_rate, replace the true label with a random wrong one.
+
+    This tests model robustness to label noise in training data.
+    """
+    if rng.random() < corruption_rate:
+        wrong_answers = [r for r in RELATIONS if r != answer]
+        return rng.choice(wrong_answers)
+    return answer
+
+
 def generate_sample(
     depth: int,
     rng: random.Random,
     direction_mix: bool = False,
+    n_distractors: int = 0,
+    corruption_rate: float = 0.0,
 ) -> KinshipSample:
-    """Generate a single kinship reasoning sample."""
+    """Generate a single kinship reasoning sample.
+
+    Args:
+        depth: number of reasoning hops.
+        rng: random number generator.
+        direction_mix: if True, mix parent/child directions.
+        n_distractors: number of irrelevant premises to add.
+        corruption_rate: probability of flipping the label (0.0 = no corruption).
+    """
     chain_rels, premises, query = generate_chain(
         depth, rng, direction_mix=direction_mix
     )
     answer = infer_relation(chain_rels)
+
+    # Optionally add distractor premises
+    if n_distractors > 0:
+        premises = add_distractors(premises, query, rng, n_distractors=n_distractors)
+
+    # Optionally corrupt the label
+    answer_for_label = corrupt_label(answer, rng, corruption_rate) if corruption_rate > 0 else answer
 
     text = premises_to_text(premises) + f" What is {query[0]}'s relation to {query[1]}?"
 
     return KinshipSample(
         premises=premises,
         query=query,
-        answer=answer,
+        answer=answer_for_label,
         chain_length=depth,
         text=text,
-        answer_idx=RELATION_TO_IDX[answer],
+        answer_idx=RELATION_TO_IDX[answer_for_label],
     )
 
 
@@ -263,6 +330,12 @@ class KinshipDataset(Dataset):
     - "train": chains of length 1 to max_train_depth.
     - "iid_test": same depth distribution as train.
     - "comp_test": chains of length max_train_depth+1 to max_test_depth.
+
+    Enhanced features:
+    - balanced_sampling: ensures roughly equal label distribution.
+    - n_distractors: adds irrelevant premises to test attention.
+    - corruption_rate: flips labels with some probability (train only).
+    - direction_mix: allows mixed parent/child chains.
     """
 
     def __init__(
@@ -270,10 +343,13 @@ class KinshipDataset(Dataset):
         split: Literal["train", "iid_test", "comp_test"] = "train",
         n_samples: int = 5000,
         max_train_depth: int = 3,
-        max_test_depth: int = 5,
-        max_seq_len: int = 256,
-        direction_mix: bool = False,
+        max_test_depth: int = 6,
+        max_seq_len: int = 384,
+        direction_mix: bool = True,
         seed: int = 42,
+        balanced_sampling: bool = True,
+        n_distractors: int = 0,
+        corruption_rate: float = 0.0,
     ):
         super().__init__()
         self.split = split
@@ -289,11 +365,55 @@ class KinshipDataset(Dataset):
         else:
             raise ValueError(f"Unknown split: {split}")
 
+        # Only corrupt training labels
+        corrupt = corruption_rate if split == "train" else 0.0
+
         self.samples: list[KinshipSample] = []
-        for _ in range(n_samples):
-            depth = rng.choice(depths)
-            sample = generate_sample(depth, rng, direction_mix=direction_mix)
-            self.samples.append(sample)
+
+        if balanced_sampling:
+            # Generate enough samples, then balance across relations
+            overgen_factor = 3
+            pool: list[KinshipSample] = []
+            for _ in range(n_samples * overgen_factor):
+                depth = rng.choice(depths)
+                sample = generate_sample(
+                    depth, rng,
+                    direction_mix=direction_mix,
+                    n_distractors=n_distractors,
+                    corruption_rate=corrupt,
+                )
+                pool.append(sample)
+
+            # Group by answer
+            from collections import defaultdict
+            by_label: dict[str, list[KinshipSample]] = defaultdict(list)
+            for s in pool:
+                by_label[s.answer].append(s)
+
+            # Sample equally from each label
+            per_label = n_samples // max(len(by_label), 1)
+            for label, samples_list in by_label.items():
+                if len(samples_list) >= per_label:
+                    self.samples.extend(rng.sample(samples_list, per_label))
+                else:
+                    # Oversample if not enough
+                    self.samples.extend(samples_list)
+                    while len(self.samples) < per_label * (list(by_label.keys()).index(label) + 1):
+                        self.samples.append(rng.choice(samples_list))
+
+            # Trim to exactly n_samples
+            rng.shuffle(self.samples)
+            self.samples = self.samples[:n_samples]
+        else:
+            for _ in range(n_samples):
+                depth = rng.choice(depths)
+                sample = generate_sample(
+                    depth, rng,
+                    direction_mix=direction_mix,
+                    n_distractors=n_distractors,
+                    corruption_rate=corrupt,
+                )
+                self.samples.append(sample)
 
     def __len__(self) -> int:
         return len(self.samples)

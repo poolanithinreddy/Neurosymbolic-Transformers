@@ -1,48 +1,78 @@
 # Neuro-Symbolic Transformers (NST)
 
-NST blends sequence models with interpretable predicate heads (R-CBM) trained under differentiable logic (DFOL). The core novelty is an **Augmented Lagrangian dual-variable framework** that replaces hand-tuned constraint weights with a learned price-of-logic λ*.
+**Neural CEGIS: Counterexample-Guided Training for Provably Constraint-Satisfying Neural Networks**
 
-Highlights:
-- **Lagrangian dual-variable** constraint optimisation — no manual λ tuning
-- LoRA-fine-tuned T5 models + CNN/Transformer encoders
-- Relational Concept Bottleneck (R-CBM) heads
-- Differentiable FOL (product t-norm, Reichenbach implication)
-- Constrained decoding via hard label masks; optional Z3 verification
-- Two benchmarks: **digit-addition** (perception + arithmetic) and **kinship** (relational reasoning)
-- ECE / Brier calibration metrics and noise robustness evaluation
-- CAGrad conflict-averse gradient descent for multi-task balancing
+NST blends neural perception with differentiable symbolic reasoning. The core novelty is **Neural CEGIS** — Counterexample-Guided Inductive Synthesis adapted for neural network training — which provably drives constraint violations to zero through a verification loop.
+
+## Key Contributions
+
+1. **Neural CEGIS**: A training paradigm where a symbolic verifier finds specific inputs where the model violates constraints, feeds them back as counterexamples, and retrains — converging when violations reach zero.
+2. **Augmented Lagrangian** dual-variable framework with learned price-of-logic λ*.
+3. **Multi-digit addition benchmark**: 2-digit + 2-digit with carry propagation — compositional split forces genuine generalisation (train WITHOUT carries, test WITH carries).
+4. **Kinship relational reasoning**: with distractors, label corruption, balanced labels, extended compositional depth (1–6).
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Neural CEGIS Outer Loop                                │
+│  ┌───────────────┐    ┌──────────────┐                  │
+│  │ LEARNER       │◄───│ CE Buffer    │                  │
+│  │ (Lagrangian   │    │ (targeted    │                  │
+│  │  inner loop)  │    │  failures)   │                  │
+│  └───────┬───────┘    └──────▲───────┘                  │
+│          │                   │                          │
+│          ▼                   │                          │
+│  ┌───────────────┐    ┌──────┴───────┐                  │
+│  │ Trained Model │───►│ VERIFIER     │                  │
+│  │               │    │ (symbolic    │                  │
+│  │               │    │  constraint  │                  │
+│  │               │    │  checker)    │                  │
+│  └───────────────┘    └──────────────┘                  │
+│  Converges when CE count → 0                            │
+└─────────────────────────────────────────────────────────┘
+```
 
 ## Install
-
-We recommend a virtual environment.
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -U pip
 pip install -e ".[dev]"
-python -m spacy download en_core_web_sm
 ```
 
-## Quick start (Mac smoke)
+## Quick Start
 
 ```bash
-make setup
-make smoke  # trains a tiny FEVER model (t5-small) and evaluates
+# Run all 102 tests
+python -m pytest tests/ -v
+
+# Dataset statistics
+python main.py multi-digit-stats
+python main.py kinship-stats
+
+# Train multi-digit baselines
+python main.py train-multi-digit --config configs/multi_digit_neural.yaml
+python main.py train-multi-digit --config configs/multi_digit_soft.yaml
+python main.py train-multi-digit --config configs/multi_digit_lagrangian.yaml
+
+# Train with Neural CEGIS (the core contribution)
+python main.py train-cegis --config configs/multi_digit_cegis.yaml
+
+# Train kinship with distractors + corruption
+python main.py train-kinship --config configs/kinship_cegis.yaml
 ```
 
 ## Colab
 
-See `colab/colab_commands.md` for copy-paste cells. A quick path:
+See `colab/nst_playbook.py` for 9 copy-paste cells. Runs the full experiment suite in ~40 minutes on a T4 GPU.
 
 ```bash
-!git clone https://github.com/<your-username>/Neurosymbolic-Transformers.git nst
+!git clone https://github.com/poolanithinreddy/Neurosymbolic-Transformers.git nst
 %cd nst
-!pip install -U pip wheel
-!pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-!pip install -e ".[dev]"
-!python -m spacy download en_core_web_sm
-!python training/train.py --config configs/colab_lora.yaml --task fever
-!python eval/fever.py --ckpt outputs/ckpt --data data/fever.tsv --split dev --report outputs/fever_dev.json --device cuda
+!pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 -q
+!pip install -e ".[dev]" -q
+!python main.py train-cegis --config configs/multi_digit_cegis.yaml
 ```
 
 ## Datasets

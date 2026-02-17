@@ -1,0 +1,18 @@
+# Multi-digit addition — pure neural baseline
+# Run: python main.py train-multi-digit --config configs/multi_digit_neural.yaml
+
+model:
+  mode: neural
+
+data:
+  n_train: 5000
+  n_test: 2000
+  img_size: 28
+
+training:
+  epochs: 30
+  lr: 1e-3
+  batch_size: 64
+  device: auto
+  seed: 42
+  outdir: outputs_multi_digit_neural

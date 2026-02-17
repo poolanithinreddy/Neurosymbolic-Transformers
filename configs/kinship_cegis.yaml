@@ -1,0 +1,28 @@
+# Kinship with CEGIS — distractors, balanced sampling, direction_mix
+# Run: python main.py train-kinship --config configs/kinship_cegis.yaml
+
+model:
+  mode: lagrangian
+
+data:
+  n_train: 8000
+  n_test: 2000
+  max_train_depth: 3
+  max_test_depth: 6
+  direction_mix: true
+  balanced_sampling: true
+  n_distractors: 2
+  corruption_rate: 0.1
+  max_seq_len: 384
+
+training:
+  epochs: 20
+  lr: 1e-3
+  batch_size: 64
+  device: auto
+  seed: 42
+  outdir: outputs_kinship_cegis
+  lagrangian_epsilon: 0.05
+  lagrangian_alpha: 0.01
+  lagrangian_rho: 1.0
+  lagrangian_lam_max: 10.0

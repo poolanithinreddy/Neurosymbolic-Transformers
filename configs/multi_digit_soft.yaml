@@ -1,0 +1,19 @@
+# Multi-digit addition — soft constraint baseline
+# Run: python main.py train-multi-digit --config configs/multi_digit_soft.yaml
+
+model:
+  mode: soft
+
+data:
+  n_train: 5000
+  n_test: 2000
+  img_size: 28
+
+training:
+  epochs: 30
+  lr: 1e-3
+  batch_size: 64
+  device: auto
+  seed: 42
+  lambda_constraint: 0.5
+  outdir: outputs_multi_digit_soft

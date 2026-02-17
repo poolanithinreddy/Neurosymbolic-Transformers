@@ -1,0 +1,28 @@
+# Multi-digit addition with Neural CEGIS
+# Run: python main.py train-multi-digit --config configs/multi_digit_cegis.yaml
+
+model:
+  mode: cegis  # uses lagrangian internally, with CEGIS outer loop
+
+data:
+  n_train: 5000
+  n_verify: 2000
+  n_test: 2000
+  img_size: 28
+
+cegis:
+  max_rounds: 10
+  inner_epochs: 15
+  lr: 1e-3
+  batch_size: 64
+  max_counterexamples: 500
+  ce_oversample: 3
+  device: auto
+  seed: 42
+  outdir: outputs_multi_digit_cegis
+
+  # Lagrangian inner loop
+  lagrangian_epsilon: 0.05
+  lagrangian_alpha: 0.01
+  lagrangian_rho: 1.0
+  lagrangian_lam_max: 10.0

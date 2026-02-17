@@ -1,9 +1,10 @@
-"""NST Colab Playbook — Copy-paste cells for end-to-end execution.
+"""NST Colab Playbook v3 — Neural CEGIS Full Experiment Suite.
 
-This file generates the Colab cells as printed output.
-Alternatively, copy the blocks below directly into Colab cells.
+Copy-paste cells for end-to-end execution on Google Colab (T4 GPU).
+Runs all ablations: single-digit, multi-digit (neural/soft/lagrangian/CEGIS),
+and kinship relational reasoning.
 
-Total estimated runtime: ~25 minutes on a T4 GPU.
+Total estimated runtime: ~40 minutes on a T4 GPU.
 """
 
 COLAB_CELLS = [
@@ -16,7 +17,7 @@ COLAB_CELLS = [
 # ========================
 # Estimated time: 2-3 minutes
 
-!git clone https://github.com/<YOUR-USERNAME>/Neurosymbolic-Transformers.git nst
+!git clone https://github.com/poolanithinreddy/Neurosymbolic-Transformers.git nst
 %cd nst
 
 !pip install -U pip wheel -q
@@ -29,234 +30,184 @@ import torch
 print(f"PyTorch: {torch.__version__}")
 print(f"CUDA: {torch.cuda.is_available()}")
 print(f"GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'N/A'}")
+
+# Run tests
+!python -m pytest tests/ -v --tb=short
 """,
 
 # ============================================================
 # Cell 2: Dataset Statistics
 # ============================================================
 """
-# Cell 2: Dataset statistics
+# Cell 2: Dataset Statistics
 # ===========================
-# Verify data generation works
 
+# Single-digit addition
 !python main.py data-stats --threshold 9
 
-print("\\n--- Kinship dataset ---")
-from data.kinship import generate_stats
-generate_stats()
+print()
+
+# Multi-digit addition (the HARD benchmark)
+!python main.py multi-digit-stats
+
+print()
+
+# Kinship
+!python main.py kinship-stats
 """,
 
 # ============================================================
-# Cell 3: Smoke Test — Neural Baseline (Digit Addition)
+# Cell 3: Single-Digit Ablation (baseline sanity check)
 # ============================================================
 """
-# Cell 3: Smoke test — Neural baseline (2 epochs)
-# =================================================
-# Estimated time: ~1 minute
+# Cell 3: Single-Digit Addition Ablation
+# ========================================
+# ~5 min total — proves ALL methods reach 100% on easy benchmark
 
 import yaml, os
 
-# Create a quick smoke config
-smoke_cfg = {
-    'seed': 42, 'device': 'auto', 'mode': 'neural',
-    'data': {'n_train': 500, 'n_test': 200, 'comp_threshold': 9},
-    'train': {'epochs': 2, 'batch_size': 64, 'lr': 0.001, 'warmup_steps': 50},
-    'logic': {'lambda': 0.0},
-    'io': {'out_dir': 'outputs_smoke_neural'},
-}
-os.makedirs('configs', exist_ok=True)
-with open('configs/smoke_neural.yaml', 'w') as f:
-    yaml.dump(smoke_cfg, f)
+modes = ["neural", "soft", "lagrangian"]
+for mode in modes:
+    cfg = {
+        "model": {"mode": mode, "constraint_mode": mode},
+        "data": {"n_train": 3000, "n_test": 500, "threshold": 9, "seed": 42},
+        "training": {
+            "epochs": 15,
+            "lr": 0.001,
+            "batch_size": 64,
+            "device": "auto",
+            "seed": 42,
+            "lambda_constraint": 0.5,
+            "cagrad": False,
+            "outdir": f"outputs_digit_add_{mode}",
+        },
+    }
+    if mode == "lagrangian":
+        cfg["training"]["lagrangian_epsilon"] = 0.05
+        cfg["training"]["lagrangian_alpha"] = 0.01
 
-!python main.py train --config configs/smoke_neural.yaml
-print("✅ Smoke test passed!")
+    cfg_path = f"configs/_colab_digit_{mode}.yaml"
+    with open(cfg_path, "w") as f:
+        yaml.dump(cfg, f)
+    print(f"\\n{'='*50}\\n  Training: {mode}\\n{'='*50}")
+    !python main.py train --config {cfg_path}
 """,
 
 # ============================================================
-# Cell 4: Full Training — All Digit-Addition Ablations
+# Cell 4: Multi-Digit Neural Baseline
 # ============================================================
 """
-# Cell 4: Full digit-addition ablation
-# ======================================
-# Trains: Neural, Soft (fixed-λ), Lagrangian, Hard (Lagrangian+Z3)
-# Estimated time: ~10 minutes total on T4
+# Cell 4: Multi-Digit Addition — Neural Baseline
+# =================================================
+# The neural baseline should FAIL on carry-propagation (comp/hard splits).
 
-import time
-start = time.time()
-
-# Neural baseline
-!python main.py train --config configs/digit_add_neural.yaml
-print(f"\\n⏱ Neural done ({time.time()-start:.0f}s)")
-
-# Fixed-λ soft constraints
-!python main.py train --config configs/digit_add_soft.yaml
-print(f"⏱ Soft done ({time.time()-start:.0f}s)")
-
-# Lagrangian adaptive constraints (CORE contribution)
-!python main.py train --config configs/digit_add_lagrangian.yaml
-print(f"⏱ Lagrangian done ({time.time()-start:.0f}s)")
-
-# CAGrad gradient balancing
-!python main.py train --config configs/digit_add_cagrad.yaml
-print(f"⏱ CAGrad done ({time.time()-start:.0f}s)")
-
-print(f"\\n✅ All digit-add ablations complete ({time.time()-start:.0f}s)")
+!python main.py train-multi-digit --config configs/multi_digit_neural.yaml
 """,
 
 # ============================================================
-# Cell 5: Evaluate Digit-Addition Models
+# Cell 5: Multi-Digit Soft Constraint
 # ============================================================
 """
-# Cell 5: Evaluate digit-addition models
-# ========================================
+# Cell 5: Multi-Digit Addition — Soft Constraint
+# ==================================================
 
-import os
-
-models = {
-    'Neural': 'outputs_digit_add_neural/ckpt/best_model.pt',
-    'Soft': 'outputs_digit_add_soft/ckpt/best_model.pt',
-    'Lagrangian': 'outputs_digit_add_lagrangian/ckpt/best_model.pt',
-    'CAGrad': 'outputs_digit_add_cagrad/ckpt/best_model.pt',
-}
-
-for name, ckpt in models.items():
-    if os.path.exists(ckpt):
-        print(f"\\n{'='*50}")
-        print(f"  {name}")
-        print(f"{'='*50}")
-        !python main.py eval --ckpt {ckpt} --n_test 2000
-
-# Lagrangian with Z3 hard inference
-lagr_ckpt = 'outputs_digit_add_lagrangian/ckpt/best_model.pt'
-if os.path.exists(lagr_ckpt):
-    print(f"\\n{'='*50}")
-    print(f"  Lagrangian + Z3 Hard")
-    print(f"{'='*50}")
-    !python main.py eval --ckpt {lagr_ckpt} --hard --n_test 2000
+!python main.py train-multi-digit --config configs/multi_digit_soft.yaml
 """,
 
 # ============================================================
-# Cell 6: Kinship Training
+# Cell 6: Multi-Digit Lagrangian
 # ============================================================
 """
-# Cell 6: Kinship relational reasoning
-# ======================================
-# Estimated time: ~8 minutes
+# Cell 6: Multi-Digit Addition — Lagrangian (Adaptive λ)
+# ========================================================
 
-import time
-start = time.time()
-
-!python main.py train-kinship --config configs/kinship_neural.yaml
-print(f"⏱ Kinship Neural done ({time.time()-start:.0f}s)")
-
-!python main.py train-kinship --config configs/kinship_soft.yaml
-print(f"⏱ Kinship Soft done ({time.time()-start:.0f}s)")
-
-!python main.py train-kinship --config configs/kinship_lagrangian.yaml
-print(f"⏱ Kinship Lagrangian done ({time.time()-start:.0f}s)")
-
-print(f"\\n✅ All kinship experiments complete ({time.time()-start:.0f}s)")
+!python main.py train-multi-digit --config configs/multi_digit_lagrangian.yaml
 """,
 
 # ============================================================
-# Cell 7: λ* Trajectory Plot
+# Cell 7: Multi-Digit CEGIS (The Core Contribution)
 # ============================================================
 """
-# Cell 7: Plot λ* trajectory (Lagrangian dual variable)
-# =======================================================
+# Cell 7: Multi-Digit Addition — Neural CEGIS 🎯
+# ==================================================
+# THIS IS THE MAIN EXPERIMENT. CEGIS should outperform all baselines
+# on the compositional (carry) split.
 
+!python main.py train-cegis --config configs/multi_digit_cegis.yaml
+
+# Print convergence trajectory
 import json
-import matplotlib.pyplot as plt
+with open("outputs_multi_digit_cegis/cegis_log.json") as f:
+    log = json.load(f)
 
-for task, path in [
-    ('Digit-Add', 'outputs_digit_add_lagrangian/lambda_trajectory.json'),
-    ('Kinship', 'outputs_kinship_lagrangian/lambda_trajectory.json'),
-]:
-    if not os.path.exists(path):
-        continue
-    with open(path) as f:
-        data = json.load(f)
-
-    steps = [t['step'] for t in data['trajectory']]
-    lambdas = [t['lambda'] for t in data['trajectory']]
-    logic_losses = [t['loss_logic'] for t in data['trajectory']]
-
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
-
-    ax1.plot(steps, lambdas, 'b-o', markersize=4)
-    ax1.set_xlabel('Epoch')
-    ax1.set_ylabel('λ (dual variable)')
-    ax1.set_title(f'{task}: λ* Trajectory')
-    ax1.axhline(y=data['epsilon'], color='r', linestyle='--', label=f'ε={data["epsilon"]}')
-    ax1.legend()
-    ax1.grid(True, alpha=0.3)
-
-    ax2.plot(steps, logic_losses, 'g-o', markersize=4)
-    ax2.set_xlabel('Epoch')
-    ax2.set_ylabel('L_logic')
-    ax2.set_title(f'{task}: Constraint Loss')
-    ax2.axhline(y=data['epsilon'], color='r', linestyle='--', label=f'ε={data["epsilon"]}')
-    ax2.legend()
-    ax2.grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    plt.savefig(f'{task.lower().replace("-","_")}_lambda_trajectory.png', dpi=150)
-    plt.show()
-    print(f"Final λ* = {data['final_lambda']:.4f} (Price of Logic)")
+print(f"\\nConverged: {log['converged']}")
+print(f"Rounds: {len(log['rounds'])}")
+print(f"Total counterexamples: {log['total_counterexamples']}")
+print("\\nCE trajectory:")
+for r in log["rounds"]:
+    print(f"  Round {r['round']}: CE={r['n_counterexamples']}, "
+          f"λ={r['lambda']:.4f}, CSR={r['csr']:.4f}")
 """,
 
 # ============================================================
-# Cell 8: Generate Results Tables
+# Cell 8: Kinship Relational Reasoning
 # ============================================================
 """
-# Cell 8: Generate LaTeX + Markdown results tables
-# ===================================================
+# Cell 8: Kinship with Distractors + Corruption
+# =================================================
+# Tests compositional generalisation: train depth 1-3, test depth 4-6
+# With 2 distractors + 10% label corruption + balanced labels.
 
-from results import render_results, results_to_latex
+!python main.py train-kinship --config configs/kinship_cegis.yaml
+""",
+
+# ============================================================
+# Cell 9: Results Summary + Visualisation
+# ============================================================
+"""
+# Cell 9: Results Summary
+# =========================
+
 import json, os, glob
 
+print("=" * 70)
+print("  NEURAL CEGIS — FULL RESULTS SUMMARY")
+print("=" * 70)
+
 # Collect all reports
-reports = {}
-for d in sorted(glob.glob('outputs_*/final_report.json')):
-    with open(d) as f:
-        data = json.load(f)
-    name = os.path.basename(os.path.dirname(d))
-    reports[name] = data
+report_files = glob.glob("outputs_*/report.json")
+for rf in sorted(report_files):
+    name = os.path.dirname(rf).replace("outputs_", "")
+    with open(rf) as f:
+        report = json.load(f)
 
-# Print markdown
-from results import results_to_markdown
-print("## Digit-Addition Results")
-digit_reports = {k: v for k, v in reports.items() if 'digit' in k}
-print(results_to_markdown(digit_reports, task='digit_add'))
+    print(f"\\n{'─'*50}")
+    print(f"  {name}")
+    print(f"{'─'*50}")
 
-print("\\n## Kinship Results")
-kinship_reports = {k: v for k, v in reports.items() if 'kinship' in k}
-if kinship_reports:
-    print(results_to_markdown(kinship_reports, task='kinship'))
+    for key in ["iid_test", "comp_test", "hard_test"]:
+        if key in report:
+            m = report[key]
+            print(f"  {key}: sum_acc={m.get('sum_acc', 'N/A'):.4f}, "
+                  f"CSR={m.get('csr', 'N/A'):.4f}")
 
-# Save LaTeX
-if digit_reports:
-    latex = results_to_latex(digit_reports, task='digit_add',
-                             caption='Digit addition results', label='tab:digit')
-    with open('results_digit_add.tex', 'w') as f:
-        f.write(latex)
-    print("\\n✅ LaTeX table saved to results_digit_add.tex")
+    if "cegis" in report:
+        c = report["cegis"]
+        print(f"  CEGIS converged: {c.get('converged', 'N/A')}, "
+              f"rounds: {c.get('total_rounds', 'N/A')}, "
+              f"final_λ: {c.get('final_lambda', 'N/A'):.4f}")
+
+print(f"\\n{'='*70}")
+print("  Expected result: Neural CEGIS >> Lagrangian >> Soft >> Neural")
+print("  on comp_test and hard_test (carry generalisation)")
+print(f"{'='*70}")
 """,
 
-# ============================================================
-# Cell 9: Run Tests
-# ============================================================
-"""
-# Cell 9: Run test suite
-# ========================
-!python -m pytest tests/ -v --tb=short
-""",
-
-]
+]  # end COLAB_CELLS
 
 
 def print_playbook():
-    """Print the Colab playbook as numbered cells."""
+    """Print all cells for copy-paste into Colab."""
     for i, cell in enumerate(COLAB_CELLS, 1):
         print(f"\n{'#' * 60}")
         print(f"# CELL {i}")

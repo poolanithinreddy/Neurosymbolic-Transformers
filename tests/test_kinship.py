@@ -67,11 +67,11 @@ class TestTokenise:
 
 class TestKinshipDataset:
     def test_train_split(self):
-        ds = KinshipDataset("train", n_samples=100, max_train_depth=3, seed=42)
+        ds = KinshipDataset("train", n_samples=100, max_train_depth=3, seed=42, balanced_sampling=False, direction_mix=False)
         assert len(ds) == 100
 
     def test_comp_split_depths(self):
-        ds = KinshipDataset("comp_test", n_samples=100, max_train_depth=3, max_test_depth=5, seed=42)
+        ds = KinshipDataset("comp_test", n_samples=100, max_train_depth=3, max_test_depth=5, seed=42, balanced_sampling=False, direction_mix=False)
         assert len(ds) == 100
         # All samples should have chain length > 3
         for s in ds.samples:

@@ -78,6 +78,24 @@ def cmd_train_kinship(args):
     train_kinship(args.config, outdir_override=args.outdir)
 
 
+def cmd_train_multi_digit(args):
+    """Train multi-digit addition model (neural/soft/lagrangian)."""
+    from training.train_multi_digit import train_multi_digit
+    train_multi_digit(args.config, outdir_override=args.outdir)
+
+
+def cmd_train_cegis(args):
+    """Train multi-digit addition model with Neural CEGIS."""
+    from training.cegis import train_multi_digit_cegis
+    train_multi_digit_cegis(args.config, outdir_override=args.outdir)
+
+
+def cmd_multi_digit_stats(args):
+    """Print multi-digit addition dataset statistics."""
+    from data.multi_digit_addition import generate_stats
+    generate_stats(seed=args.seed, n_train=args.n_train, n_test=args.n_test)
+
+
 def cmd_kinship_stats(args):
     """Print kinship dataset statistics."""
     from data.kinship import KinshipDataset
@@ -216,6 +234,22 @@ def main():
     p_kstats.add_argument("--n_train", type=int, default=5000)
     p_kstats.add_argument("--n_test", type=int, default=2000)
 
+    # train-multi-digit
+    p_md = subparsers.add_parser("train-multi-digit", help="Train multi-digit addition model")
+    p_md.add_argument("--config", required=True, help="YAML config path")
+    p_md.add_argument("--outdir", default=None, help="Override output directory")
+
+    # train-cegis
+    p_cegis = subparsers.add_parser("train-cegis", help="Train multi-digit with Neural CEGIS")
+    p_cegis.add_argument("--config", required=True, help="YAML config path")
+    p_cegis.add_argument("--outdir", default=None, help="Override output directory")
+
+    # multi-digit-stats
+    p_mdstats = subparsers.add_parser("multi-digit-stats", help="Multi-digit dataset stats")
+    p_mdstats.add_argument("--seed", type=int, default=42)
+    p_mdstats.add_argument("--n_train", type=int, default=5000)
+    p_mdstats.add_argument("--n_test", type=int, default=2000)
+
     # results
     p_res = subparsers.add_parser("results", help="Generate results tables from output dirs")
     p_res.add_argument("--format", choices=["markdown", "latex"], default="markdown")
@@ -237,6 +271,9 @@ def main():
         "data-stats": cmd_data_stats,
         "train-fever": cmd_train_fever,
         "train-kinship": cmd_train_kinship,
+        "train-multi-digit": cmd_train_multi_digit,
+        "train-cegis": cmd_train_cegis,
+        "multi-digit-stats": cmd_multi_digit_stats,
         "kinship-stats": cmd_kinship_stats,
         "results": cmd_results,
         "ablation": cmd_ablation,
