@@ -281,43 +281,75 @@ def aggregate_results(
 # CLI: Load and render results
 # ---------------------------------------------------------------------------
 
-def load_reports(report_dir: str) -> dict[str, dict]:
-    """Load all final_report.json files from experiment output directories."""
+def load_reports(report_dirs: str | list[str]) -> dict[str, dict]:
+    """Load all final_report.json files from experiment output directories.
+
+    Args:
+        report_dirs: single directory path, or list of directory paths.
+            Each directory should contain a final_report.json file,
+            OR contain subdirectories that each have a final_report.json.
+    """
     reports = {}
-    if os.path.isdir(report_dir):
+
+    if isinstance(report_dirs, str):
+        report_dirs = [report_dirs]
+
+    for report_dir in report_dirs:
+        if not os.path.isdir(report_dir):
+            continue
+
+        # Check if this directory itself has a final_report.json
+        direct_report = os.path.join(report_dir, "final_report.json")
+        if os.path.exists(direct_report):
+            name = os.path.basename(report_dir)
+            with open(direct_report) as f:
+                reports[name] = json.load(f)
+            continue
+
+        # Otherwise scan subdirectories
         for entry in sorted(os.listdir(report_dir)):
             report_path = os.path.join(report_dir, entry, "final_report.json")
             if os.path.exists(report_path):
                 with open(report_path) as f:
                     reports[entry] = json.load(f)
+
     return reports
 
 
 def render_results(
-    report_paths: list[str] | None = None,
+    reports: dict[str, dict] | list[str] | None = None,
     output_format: str = "markdown",
+    fmt: str | None = None,
     task: str = "digit_add",
 ) -> str:
     """Load reports and render as table.
 
     Args:
-        report_paths: list of paths to final_report.json files.
+        reports: dict of {name: report_data}, OR list of paths to
+            final_report.json files (for backwards compatibility).
         output_format: "markdown" or "latex".
+        fmt: alias for output_format (takes priority if set).
         task: "digit_add" or "kinship".
 
     Returns:
         Rendered table string.
     """
-    if report_paths is None:
-        report_paths = []
+    if fmt is not None:
+        output_format = fmt
 
-    results = {}
-    for path in report_paths:
-        if os.path.exists(path):
-            with open(path) as f:
-                data = json.load(f)
-            name = data.get("mode", os.path.basename(os.path.dirname(path)))
-            results[name] = data
+    # If reports is a dict, use directly
+    if isinstance(reports, dict):
+        results = reports
+    else:
+        # Treat as list of file paths (backwards compatibility)
+        report_paths = reports or []
+        results = {}
+        for path in report_paths:
+            if os.path.exists(path):
+                with open(path) as f:
+                    data = json.load(f)
+                name = data.get("mode", os.path.basename(os.path.dirname(path)))
+                results[name] = data
 
     if output_format == "latex":
         return results_to_latex(results, task=task)

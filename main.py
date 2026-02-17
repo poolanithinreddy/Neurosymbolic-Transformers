@@ -90,6 +90,27 @@ def cmd_train_cegis(args):
     train_multi_digit_cegis(args.config, outdir_override=args.outdir)
 
 
+def cmd_train_kinship_cegis(args):
+    """Train kinship model with Neural CEGIS."""
+    from training.cegis import train_kinship_cegis
+    train_kinship_cegis(args.config, outdir_override=args.outdir)
+
+
+def cmd_multi_seed(args):
+    """Run multi-seed training for error bars."""
+    from training.multi_seed import run_multi_seed, _resolve_train_fn, parse_seeds
+    seeds = parse_seeds(args.seeds)
+    train_fn = _resolve_train_fn(args.task)
+    base_outdir = args.outdir or f"outputs_{args.task}_multiseed"
+    run_multi_seed(
+        train_fn=train_fn,
+        config_path=args.config,
+        seeds=seeds,
+        base_outdir=base_outdir,
+        task_name=args.task,
+    )
+
+
 def cmd_multi_digit_stats(args):
     """Print multi-digit addition dataset statistics."""
     from data.multi_digit_addition import generate_stats
@@ -244,6 +265,20 @@ def main():
     p_cegis.add_argument("--config", required=True, help="YAML config path")
     p_cegis.add_argument("--outdir", default=None, help="Override output directory")
 
+    # train-kinship-cegis
+    p_kcegis = subparsers.add_parser("train-kinship-cegis", help="Train kinship with Neural CEGIS")
+    p_kcegis.add_argument("--config", required=True, help="YAML config path")
+    p_kcegis.add_argument("--outdir", default=None, help="Override output directory")
+
+    # multi-seed
+    p_mseed = subparsers.add_parser("multi-seed", help="Multi-seed run for error bars")
+    p_mseed.add_argument("--task", required=True,
+                         choices=["train", "train-kinship", "train-multi-digit",
+                                  "train-cegis", "train-kinship-cegis"])
+    p_mseed.add_argument("--config", required=True, help="YAML config path")
+    p_mseed.add_argument("--seeds", default="42,43,44", help="Comma-separated seeds")
+    p_mseed.add_argument("--outdir", default=None, help="Base output directory")
+
     # multi-digit-stats
     p_mdstats = subparsers.add_parser("multi-digit-stats", help="Multi-digit dataset stats")
     p_mdstats.add_argument("--seed", type=int, default=42)
@@ -273,6 +308,8 @@ def main():
         "train-kinship": cmd_train_kinship,
         "train-multi-digit": cmd_train_multi_digit,
         "train-cegis": cmd_train_cegis,
+        "train-kinship-cegis": cmd_train_kinship_cegis,
+        "multi-seed": cmd_multi_seed,
         "multi-digit-stats": cmd_multi_digit_stats,
         "kinship-stats": cmd_kinship_stats,
         "results": cmd_results,

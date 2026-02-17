@@ -607,3 +607,239 @@ def _evaluate_split(
         "csr": csr_total / max(total, 1),
         "n_samples": total,
     }
+
+
+# ─────────────────────────────────────────────────────────────
+# Domain-specific helpers: Kinship relational reasoning
+# ─────────────────────────────────────────────────────────────
+
+def kinship_verify_fn(
+    model: torch.nn.Module,
+    dataloader: DataLoader,
+    device: str,
+    max_ce: int = 500,
+) -> list[dict]:
+    """Find counterexamples for kinship relational reasoning.
+
+    A counterexample is any input where the model's prediction is
+    inconsistent with the chain-length constraints (e.g., predicting
+    "parent" for a depth-3 chain when only ancestor/descendant/sibling
+    are valid).
+    """
+    from data.kinship import check_kinship_constraint
+
+    counterexamples = []
+    model.eval()
+
+    with torch.no_grad():
+        for batch in dataloader:
+            input_ids = batch["input_ids"].to(device)
+            labels = batch["label"].to(device)
+            chain_lengths = batch["chain_lengths"]
+
+            result = model(input_ids, labels=labels, chain_lengths=chain_lengths)
+            preds = result["probs"].argmax(dim=-1)
+
+            # Check constraint violations per sample
+            for i in range(len(labels)):
+                cl = chain_lengths[i]
+                pred = preds[i].item()
+                label = labels[i].item()
+
+                # Constraint violation: prediction in wrong structural category
+                violated = False
+                if cl == 1 and pred not in (0, 1):        # must be parent/child
+                    violated = True
+                elif cl == 2 and pred not in (2, 3, 4):    # grandparent/grandchild/sibling
+                    violated = True
+                elif cl >= 3 and pred not in (4, 5, 6):    # sibling/ancestor/descendant
+                    violated = True
+
+                # Also treat wrong predictions as counterexamples
+                if pred != label:
+                    violated = True
+
+                if violated:
+                    ce = {
+                        "input_ids": batch["input_ids"][i].cpu(),
+                        "label": batch["label"][i].cpu(),
+                        "chain_length": chain_lengths[i],
+                        "text": batch["texts"][i] if "texts" in batch else "",
+                        "answer": batch["answers"][i] if "answers" in batch else "",
+                    }
+                    counterexamples.append(ce)
+                    if len(counterexamples) >= max_ce:
+                        return counterexamples
+
+    return counterexamples
+
+
+def kinship_ce_to_dataset(
+    counterexamples: list[dict],
+    device: str,  # unused — tensors stay on CPU
+) -> Dataset:
+    """Convert kinship counterexample dicts to a Dataset."""
+    return _KinshipCEDataset(counterexamples)
+
+
+class _KinshipCEDataset(Dataset):
+    """Thin wrapper for kinship counterexample dicts as a Dataset."""
+
+    def __init__(self, ce_list: list[dict]):
+        self.data = ce_list
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        ce = self.data[idx]
+        return {
+            "input_ids": ce["input_ids"],
+            "label": ce["label"],
+            "chain_length": ce["chain_length"],
+            "text": ce.get("text", ""),
+            "answer": ce.get("answer", ""),
+        }
+
+
+# ─────────────────────────────────────────────────────────────
+# Entry point: train kinship with CEGIS
+# ─────────────────────────────────────────────────────────────
+
+def train_kinship_cegis(config_path: str, outdir_override: str | None = None) -> dict:
+    """Full training pipeline for kinship with Neural CEGIS.
+
+    Args:
+        config_path: path to YAML config.
+        outdir_override: optional override for output directory.
+
+    Returns:
+        Report dict.
+    """
+    import yaml
+
+    with open(config_path) as f:
+        raw_cfg = yaml.safe_load(f)
+
+    cegis_cfg = CEGISConfig.from_yaml(config_path)
+    if outdir_override:
+        cegis_cfg.outdir = outdir_override
+
+    device = _auto_device(cegis_cfg.device)
+
+    # Dataset
+    from data.kinship import KinshipDataset, kinship_collate_fn
+
+    data_cfg = raw_cfg.get("data", {})
+    train_ds = KinshipDataset(
+        split="train",
+        n_samples=int(data_cfg.get("n_train", 5000)),
+        max_train_depth=int(data_cfg.get("max_train_depth", 3)),
+        max_test_depth=int(data_cfg.get("max_test_depth", 6)),
+        max_seq_len=int(data_cfg.get("max_seq_len", 384)),
+        direction_mix=data_cfg.get("direction_mix", True),
+        seed=cegis_cfg.seed,
+        balanced_sampling=data_cfg.get("balanced_sampling", True),
+        n_distractors=int(data_cfg.get("n_distractors", 2)),
+        corruption_rate=float(data_cfg.get("corruption_rate", 0.0)),
+    )
+    verify_ds = KinshipDataset(
+        split="comp_test",
+        n_samples=int(data_cfg.get("n_verify", 2000)),
+        max_train_depth=int(data_cfg.get("max_train_depth", 3)),
+        max_test_depth=int(data_cfg.get("max_test_depth", 6)),
+        max_seq_len=int(data_cfg.get("max_seq_len", 384)),
+        direction_mix=data_cfg.get("direction_mix", True),
+        seed=cegis_cfg.seed + 1,
+        balanced_sampling=data_cfg.get("balanced_sampling", True),
+        n_distractors=int(data_cfg.get("n_distractors", 2)),
+    )
+
+    # Model
+    from models.nst_kinship import KinshipTransformer
+
+    model_cfg = raw_cfg.get("model", {})
+    model = KinshipTransformer(
+        d_model=int(model_cfg.get("d_model", 128)),
+        n_heads=int(model_cfg.get("n_heads", 4)),
+        n_layers=int(model_cfg.get("n_layers", 2)),
+        d_ff=int(model_cfg.get("d_ff", 256)),
+        dropout=float(model_cfg.get("dropout", 0.1)),
+        max_seq_len=int(data_cfg.get("max_seq_len", 384)),
+    )
+
+    # CEGIS trainer
+    trainer = CEGISTrainer(
+        model=model,
+        train_dataset=train_ds,
+        verify_dataset=verify_ds,
+        verify_fn=kinship_verify_fn,
+        ce_to_dataset_fn=kinship_ce_to_dataset,
+        collate_fn=kinship_collate_fn,
+        config=cegis_cfg,
+    )
+
+    report = trainer.run()
+
+    # Final evaluation on all splits
+    from data.kinship import KinshipDataset as KDS
+
+    logger.info("\n" + "=" * 50)
+    logger.info("FINAL EVALUATION (Kinship CEGIS)")
+
+    final_report = {"cegis": report}
+    for split in ("iid_test", "comp_test"):
+        test_ds = KDS(
+            split=split,
+            n_samples=int(data_cfg.get("n_test", 2000)),
+            max_train_depth=int(data_cfg.get("max_train_depth", 3)),
+            max_test_depth=int(data_cfg.get("max_test_depth", 6)),
+            max_seq_len=int(data_cfg.get("max_seq_len", 384)),
+            seed=cegis_cfg.seed + 10,
+        )
+        test_loader = DataLoader(
+            test_ds, batch_size=cegis_cfg.batch_size,
+            collate_fn=kinship_collate_fn, shuffle=False,
+        )
+        metrics = _evaluate_kinship_split(model, test_loader, device)
+        final_report[split] = metrics
+        logger.info(f"  {split}: acc={metrics['accuracy']:.4f}, CSR={metrics['csr']:.4f}")
+
+    # Save final report
+    with open(os.path.join(cegis_cfg.outdir, "report.json"), "w") as f:
+        json.dump(final_report, f, indent=2)
+
+    return final_report
+
+
+@torch.no_grad()
+def _evaluate_kinship_split(
+    model: torch.nn.Module,
+    loader: DataLoader,
+    device: str,
+) -> dict:
+    """Evaluate kinship model on a split."""
+    model.eval()
+    model.to(device)
+
+    correct = total = 0
+    csr_total = 0.0
+    n_batches = 0
+
+    for batch in loader:
+        input_ids = batch["input_ids"].to(device)
+        labels = batch["label"].to(device)
+        chain_lengths = batch["chain_lengths"]
+
+        result = model(input_ids, labels=labels, chain_lengths=chain_lengths)
+        preds = result["probs"].argmax(dim=-1)
+        correct += (preds == labels).sum().item()
+        total += labels.size(0)
+        csr_total += result.get("csr", 0.0)
+        n_batches += 1
+
+    return {
+        "accuracy": correct / max(1, total),
+        "csr": csr_total / max(1, n_batches),
+        "n_samples": total,
+    }
