@@ -1,0 +1,46 @@
+# FEVER Gold Evidence — NST Soft Constraints (Setting A)
+# DeBERTa-v3-base + fixed-weight symbolic constraints
+# Expected: marginal gain over neural baseline via constraint regularization
+
+mode: "soft"
+device: "auto"
+seed: 42
+
+task: "fever"
+evidence_mode: "gold"
+
+io:
+  out_dir: "outputs_fever_gold_nst_soft"
+
+model:
+  name: "microsoft/deberta-v3-base"
+  num_labels: 3
+  label_smoothing: 0.05
+  dropout: 0.1
+  max_length: 256
+
+data:
+  max_train: null
+  max_dev: null
+  dev_sample: 2000
+
+train:
+  epochs: 3
+  batch_size: 16
+  grad_accum_steps: 2
+  lr: 2.0e-5
+  warmup_ratio: 0.06
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  fp16: true
+  eval_every_steps: 500
+  patience: 5
+
+logic:
+  lambda: 0.1                 # fixed constraint weight
+  constraint_weights:
+    date_contradiction: 1.0
+    number_contradiction: 1.0
+    negation_mismatch: 0.8
+    low_entity_overlap: 0.5
+    empty_evidence: 0.3

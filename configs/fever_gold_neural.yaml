@@ -1,0 +1,41 @@
+# FEVER Gold Evidence — Pure Neural Baseline (Setting A)
+# DeBERTa-v3-base, no symbolic constraints
+# Expected: ~88-92% label accuracy on labelled_dev
+
+mode: "neural"
+device: "auto"
+seed: 42
+
+task: "fever"
+evidence_mode: "gold"          # Setting A: oracle gold evidence
+
+io:
+  out_dir: "outputs_fever_gold_neural"
+
+model:
+  name: "microsoft/deberta-v3-base"
+  num_labels: 3
+  label_smoothing: 0.05
+  dropout: 0.1
+  max_length: 256
+
+data:
+  max_train: null              # null = use all ~145k train samples
+  max_dev: null                # null = use all ~19k labelled_dev
+  dev_sample: 2000             # subset for periodic eval during training
+
+train:
+  epochs: 3
+  batch_size: 16
+  grad_accum_steps: 2          # effective batch = 32
+  lr: 2.0e-5
+  warmup_ratio: 0.06
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  fp16: true
+  eval_every_steps: 500
+  patience: 5
+
+logic:
+  lambda: 0.0
+  constraint_weights: null

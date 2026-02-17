@@ -130,6 +130,9 @@ def _resolve_train_fn(task: str) -> Callable:
     elif task in ("train-kinship-cegis", "kinship_cegis"):
         from training.cegis import train_kinship_cegis
         return train_kinship_cegis
+    elif task in ("train-fever-nst", "fever_nst", "fever"):
+        from training.train_fever_nst import train_fever_nst
+        return train_fever_nst
     else:
         raise ValueError(f"Unknown task: {task}")
 
@@ -145,7 +148,8 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Multi-seed training runner")
     ap.add_argument("--task", required=True,
                     choices=["train", "train-kinship", "train-multi-digit",
-                             "train-cegis", "train-kinship-cegis"],
+                             "train-cegis", "train-kinship-cegis",
+                             "train-fever-nst"],
                     help="Training task to run")
     ap.add_argument("--config", required=True, help="YAML config path")
     ap.add_argument("--seeds", default="42,43,44", help="Comma-separated seeds")

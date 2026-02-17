@@ -419,3 +419,55 @@ Available pair pool: no-carry ≈ 1,980, 1-carry ≈ 3,735, 2-carry ≈ 2,385.
 | Comp Test | 2,000 | 4–6 | Compositional depth generalisation |
 
 8 relations: parent, child, grandparent, grandchild, sibling, ancestor, descendant, self.
+
+### FEVER Fact Verification
+
+We apply Neural CEGIS to the FEVER fact verification benchmark (Thorne et al., 2018 — VERIFY), which requires classifying claim–evidence pairs as SUPPORTS, REFUTES, or NOT ENOUGH INFO.
+
+**Two evaluation settings** (clearly distinguished throughout):
+
+| Setting | Evidence Source | Primary Metric | Description |
+|---------|---------------|----------------|-------------|
+| **A (Gold Evidence)** | Oracle evidence sentences | Label Accuracy | Isolates NLI capability |
+| **B (Full Pipeline)** | BM25 retrieval (top-5) | End-to-End FEVER Score | Measures retrieval + NLI |
+
+**Architecture.** We use DeBERTa-v3-base (He et al., 2023 — VERIFY) for 3-class sequence classification, replacing the T5 seq2seq approach from prior iterations. DeBERTa's disentangled attention handles entity and position comparisons well for NLI tasks.
+
+**Five differentiable constraints** extracted from claim–evidence text (using noisy regex extraction, NOT from labels):
+
+| Constraint | Signal | Implication |
+|------------|--------|-------------|
+| C1: Date contradiction | Conflicting dates in claim vs evidence | → ¬SUPPORTS |
+| C2: Number contradiction | Conflicting numbers in claim vs evidence | → ¬SUPPORTS |
+| C3: Negation mismatch | Asymmetric negation cues | → ¬SUPPORTS |
+| C4: Low entity overlap | Jaccard similarity < 0.2 | → NEI |
+| C5: Empty evidence | No evidence text provided | → NEI |
+
+Constraints use product t-norm semantics (same as multi-digit and kinship), enabling differentiable loss computation on label probabilities P(SUPPORTS), P(REFUTES), P(NEI).
+
+**Training modes.** Neural (pure CE loss), Soft (CE + fixed λ), Lagrangian (CE + adaptive λ), CEGIS (Lagrangian + counterexample mining on constraint violations).
+
+**Integrity safeguards:**
+- Split hashes (SHA-256) for reproducibility verification
+- Leakage guard: FeverPipelineDataset rejects if >90% of retrieved evidence matches gold
+- Shuffle sanity: shuffled labels → accuracy drops to ~33% (chance level)
+- All results reported as mean ± std over 3 seeds
+
+#### FEVER Results — Gold Evidence (Setting A)
+
+| Model | Label Acc | ECE ↓ | Brier ↓ |
+|-------|----------|-------|---------|
+| DeBERTa Neural | TBD | TBD | TBD |
+| DeBERTa + NST-Soft | TBD | TBD | TBD |
+| DeBERTa + NST-CEGIS | TBD | TBD | TBD |
+
+*Results pending experimental runs. All numbers will be reported with 3-seed mean ± std.*
+
+#### Error Decomposition — Full Pipeline (Setting B)
+
+| Component | Metric | Value |
+|-----------|--------|-------|
+| BM25 Retrieval | Recall@5 | TBD |
+| NLI (Gold Evidence) | Label Accuracy | TBD |
+| End-to-End Pipeline | FEVER Score | TBD |
+| Retrieval-caused loss | Gold Acc × (1 - Recall@5) | TBD |

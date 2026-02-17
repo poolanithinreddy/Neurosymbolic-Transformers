@@ -1,0 +1,46 @@
+# FEVER Full Pipeline — Pure Neural (Setting B)
+# DeBERTa-v3-base + BM25 retrieval, no symbolic constraints
+# Expected: lower accuracy than gold due to retrieval noise
+
+mode: "neural"
+device: "auto"
+seed: 42
+
+task: "fever"
+evidence_mode: "pipeline"      # Setting B: BM25 retrieved evidence
+
+io:
+  out_dir: "outputs_fever_pipeline_neural"
+
+model:
+  name: "microsoft/deberta-v3-base"
+  num_labels: 3
+  label_smoothing: 0.05
+  dropout: 0.1
+  max_length: 256
+
+data:
+  max_train: null
+  max_dev: null
+  dev_sample: 2000
+
+retrieval:
+  top_k: 5
+  cache_dir: "retrieval_cache"
+  use_synthetic: true          # smoke-test mode (no Wikipedia dump needed)
+
+train:
+  epochs: 3
+  batch_size: 16
+  grad_accum_steps: 2
+  lr: 2.0e-5
+  warmup_ratio: 0.06
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  fp16: true
+  eval_every_steps: 500
+  patience: 5
+
+logic:
+  lambda: 0.0
+  constraint_weights: null

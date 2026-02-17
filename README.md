@@ -93,6 +93,10 @@ make all-paper        # all of the above
 | `multi-digit-stats` | Multi-digit dataset statistics |
 | `kinship-stats` | Kinship dataset statistics |
 | `train-fever` | Train FEVER (original pipeline) |
+| `train-fever-nst` | Train FEVER NLI with DeBERTa + NST constraints |
+| `fever-stats` | Print FEVER dataset statistics + split hashes |
+| `eval-fever` | Evaluate FEVER NLI checkpoint |
+| `export-fever-tables` | Export FEVER results as Markdown tables |
 
 ## Configs
 
@@ -108,10 +112,17 @@ make all-paper        # all of the above
 | `kinship_neural.yaml` | Pure neural baseline | Kinship |
 | `kinship_lagrangian.yaml` | Augmented Lagrangian | Kinship |
 | `kinship_cegis.yaml` | **Neural CEGIS** | Kinship |
+| `fever_gold_neural.yaml` | Pure neural baseline | FEVER (Gold Evidence) |
+| `fever_gold_nst_soft.yaml` | Soft constraints (fixed λ) | FEVER (Gold Evidence) |
+| `fever_gold_nst_cegis.yaml` | **Neural CEGIS** | FEVER (Gold Evidence) |
+| `fever_pipeline_neural.yaml` | Pure neural baseline | FEVER (Full Pipeline) |
+| `fever_pipeline_nst_cegis.yaml` | **Neural CEGIS** | FEVER (Full Pipeline) |
 
 ## Colab
 
 See `colab/nst_playbook.py` for copy-paste cells. Runs the full experiment suite in ~40 minutes on a T4 GPU.
+
+For FEVER specifically, see `colab/fever_playbook.py` (10 cells, ~30 min on T4).
 
 ```bash
 !git clone https://github.com/poolanithinreddy/Neurosymbolic-Transformers.git nst
@@ -119,6 +130,33 @@ See `colab/nst_playbook.py` for copy-paste cells. Runs the full experiment suite
 !pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 -q
 !pip install -e ".[dev]" -q
 !python main.py train-cegis --config configs/multi_digit_cegis.yaml
+```
+
+## FEVER Fact Verification
+
+NST includes a full FEVER fact verification pipeline with two evaluation settings:
+
+- **Setting A (Gold Evidence)**: Oracle evidence → Label Accuracy. Uses `FeverGoldDataset` with canonical FEVER labels (SUPPORTS / REFUTES / NOT ENOUGH INFO).
+- **Setting B (Full Pipeline)**: BM25 retrieval + NLI → End-to-End FEVER Score. Uses `FeverPipelineDataset` with leakage guards.
+
+**Architecture**: DeBERTa-v3-base for 3-class NLI + 5 differentiable constraints (date contradiction → ¬SUPPORTS, number contradiction → ¬SUPPORTS, negation mismatch → ¬SUPPORTS, low entity overlap → NEI, empty evidence → NEI).
+
+```bash
+# Dataset stats + split hashes
+python main.py fever-stats
+
+# Train neural baseline (gold evidence)
+python main.py train-fever-nst --config configs/fever_gold_neural.yaml
+
+# Train NST-CEGIS (gold evidence)
+python main.py train-fever-nst --config configs/fever_gold_nst_cegis.yaml
+
+# Multi-seed for error bars
+python main.py multi-seed --task train-fever-nst \
+    --config configs/fever_gold_nst_cegis.yaml --seeds 42,43,44
+
+# Evaluate a checkpoint
+python main.py eval-fever --ckpt outputs_fever_gold_neural/ckpt/best_model.pt
 ```
 
 ## Reproducibility

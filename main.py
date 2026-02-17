@@ -72,6 +72,128 @@ def cmd_train_fever(args):
     train_one(args.config, task="fever", outdir_override=args.outdir)
 
 
+def cmd_train_fever_nst(args):
+    """Train FEVER NLI model with neuro-symbolic constraints (DeBERTa)."""
+    from training.train_fever_nst import train_fever_nst
+    train_fever_nst(args.config, outdir_override=args.outdir)
+
+
+def cmd_fever_stats(args):
+    """Print FEVER dataset statistics and split hashes."""
+    from data.fever_dataset import load_fever_splits, print_fever_stats
+    splits = load_fever_splits(max_train=args.max_train, max_dev=args.max_dev)
+    print_fever_stats(splits)
+
+
+def cmd_eval_fever(args):
+    """Evaluate a trained FEVER NLI checkpoint."""
+    import torch
+    from data.fever_dataset import (
+        load_fever_splits, FeverGoldDataset, fever_collate_fn, ID2LABEL,
+    )
+    from models.fever_nli import build_fever_model, FeverNLIWrapper
+    from eval.fever_metrics import label_accuracy, confusion_matrix, integrity_check
+    from eval.calibration_metrics import expected_calibration_error, brier_score
+
+    device = args.device
+    if device == "auto":
+        device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
+
+    # Load model
+    tokenizer, base_model = build_fever_model(
+        model_name=args.model_name, num_labels=3,
+    )
+    wrapper = FeverNLIWrapper(base_model)
+    state = torch.load(args.ckpt, map_location="cpu", weights_only=True)
+    wrapper.load_state_dict(state, strict=False)
+    wrapper.to(device).eval()
+
+    # Load data
+    splits = load_fever_splits(max_dev=args.max_dev)
+    dev_ds = FeverGoldDataset(splits["dev"])
+    loader = torch.utils.data.DataLoader(
+        dev_ds, batch_size=args.batch_size,
+        collate_fn=lambda b: fever_collate_fn(b, tokenizer, max_length=256),
+    )
+
+    all_preds, all_golds, all_probs = [], [], []
+    with torch.no_grad():
+        for batch in loader:
+            input_ids = batch["input_ids"].to(device)
+            attn_mask = batch["attention_mask"].to(device)
+            labels = batch["labels"]
+            out = wrapper(input_ids, attn_mask)
+            probs = out["probs"].cpu()
+            preds = probs.argmax(dim=-1)
+            all_preds.extend(preds.tolist())
+            all_golds.extend(labels.tolist())
+            all_probs.append(probs)
+
+    all_probs = torch.cat(all_probs, dim=0)
+    pred_labels = [ID2LABEL[p] for p in all_preds]
+    gold_labels = [ID2LABEL[g] for g in all_golds]
+
+    # Metrics
+    acc_report = label_accuracy(pred_labels, gold_labels)
+    cm = confusion_matrix(pred_labels, gold_labels)
+    confidences = all_probs.max(dim=-1).values.numpy()
+    correctness = [int(p == g) for p, g in zip(all_preds, all_golds)]
+    ece = expected_calibration_error(confidences, correctness)
+    bs = brier_score(all_probs.numpy(), all_golds)
+
+    print(f"\n{'='*50}")
+    print(f"  FEVER Evaluation — Gold Evidence")
+    print(f"{'='*50}")
+    print(f"  Label Accuracy:  {acc_report['accuracy']:.4f}")
+    print(f"  ECE:             {ece:.4f}")
+    print(f"  Brier:           {bs:.4f}")
+    print(f"\n  Per-class:")
+    for lbl, stats in acc_report["per_class"].items():
+        print(f"    {lbl:<20} {stats['accuracy']:.4f}  ({stats['correct']}/{stats['count']})")
+    print(f"\n  Confusion matrix (gold \u2192 pred):")
+    print(f"    {'':>20} {'SUPPORTS':>10} {'REFUTES':>10} {'NEI':>10}")
+    for g in ["SUPPORTS", "REFUTES", "NOT ENOUGH INFO"]:
+        row = cm.get(g, {})
+        print(f"    {g:>20} {row.get('SUPPORTS', 0):>10} {row.get('REFUTES', 0):>10} {row.get('NOT ENOUGH INFO', 0):>10}")
+
+    # Integrity
+    checks = integrity_check(splits, pred_labels, gold_labels, evidence_mode="gold")
+    print(f"\n  Integrity checks:")
+    for k, v in checks.items():
+        print(f"    {k}: {v}")
+
+
+def cmd_export_fever_tables(args):
+    """Export FEVER results as formatted tables."""
+    from eval.fever_metrics import format_results_table
+    import glob
+
+    dirs = args.dirs or sorted(glob.glob("outputs_fever_*"))
+    if not dirs:
+        print("No FEVER output directories found.")
+        return
+
+    results = {}
+    for d in dirs:
+        report_path = os.path.join(d, "report.json")
+        if os.path.exists(report_path):
+            with open(report_path) as f:
+                results[os.path.basename(d)] = json.load(f)
+
+    if not results:
+        print("No report.json files found.")
+        return
+
+    evidence_mode = args.evidence_mode or "gold"
+    table = format_results_table(results, evidence_mode=evidence_mode)
+    print(table)
+
+    if args.save:
+        with open(args.save, "w") as f:
+            f.write(table)
+        print(f"\nSaved to {args.save}")
+
+
 def cmd_train_kinship(args):
     """Train kinship relational-reasoning model."""
     from training.train_kinship import train_kinship
@@ -294,6 +416,30 @@ def main():
     p_fever.add_argument("--config", required=True, help="YAML config path")
     p_fever.add_argument("--outdir", default=None)
 
+    # train-fever-nst
+    p_fnst = subparsers.add_parser("train-fever-nst", help="Train FEVER NLI with DeBERTa + NST constraints")
+    p_fnst.add_argument("--config", required=True, help="YAML config path")
+    p_fnst.add_argument("--outdir", default=None)
+
+    # fever-stats
+    p_fstats = subparsers.add_parser("fever-stats", help="Print FEVER dataset statistics")
+    p_fstats.add_argument("--max_train", type=int, default=None)
+    p_fstats.add_argument("--max_dev", type=int, default=None)
+
+    # eval-fever
+    p_efever = subparsers.add_parser("eval-fever", help="Evaluate FEVER NLI checkpoint")
+    p_efever.add_argument("--ckpt", required=True, help="Best model checkpoint path")
+    p_efever.add_argument("--model_name", default="microsoft/deberta-v3-base")
+    p_efever.add_argument("--device", default="auto")
+    p_efever.add_argument("--max_dev", type=int, default=None)
+    p_efever.add_argument("--batch_size", type=int, default=32)
+
+    # export-fever-tables
+    p_ftables = subparsers.add_parser("export-fever-tables", help="Export FEVER results as tables")
+    p_ftables.add_argument("--dirs", nargs="*", help="Output directories to scan")
+    p_ftables.add_argument("--evidence_mode", choices=["gold", "pipeline"], default=None)
+    p_ftables.add_argument("--save", default=None, help="Save table to file")
+
     # train-kinship
     p_kin = subparsers.add_parser("train-kinship", help="Train kinship relational-reasoning model")
     p_kin.add_argument("--config", required=True, help="YAML config path")
@@ -324,7 +470,8 @@ def main():
     p_mseed = subparsers.add_parser("multi-seed", help="Multi-seed run for error bars")
     p_mseed.add_argument("--task", required=True,
                          choices=["train", "train-kinship", "train-multi-digit",
-                                  "train-cegis", "train-kinship-cegis"])
+                                  "train-cegis", "train-kinship-cegis",
+                                  "train-fever-nst"])
     p_mseed.add_argument("--config", required=True, help="YAML config path")
     p_mseed.add_argument("--seeds", default="42,43,44", help="Comma-separated seeds")
     p_mseed.add_argument("--outdir", default=None, help="Base output directory")
@@ -386,6 +533,10 @@ def main():
         "eval": cmd_eval,
         "data-stats": cmd_data_stats,
         "train-fever": cmd_train_fever,
+        "train-fever-nst": cmd_train_fever_nst,
+        "fever-stats": cmd_fever_stats,
+        "eval-fever": cmd_eval_fever,
+        "export-fever-tables": cmd_export_fever_tables,
         "train-kinship": cmd_train_kinship,
         "train-multi-digit": cmd_train_multi_digit,
         "train-cegis": cmd_train_cegis,
