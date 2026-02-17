@@ -55,14 +55,21 @@ def _normalise_label(raw: str) -> str:
     return mapping.get(raw, "NOT ENOUGH INFO")
 
 
-def _concat_evidence_sentences(evidence_sets: list) -> str:
+def _concat_evidence_sentences(
+    evidence_sets: list,
+    wiki_page_map: dict[str, list[str]] | None = None,
+) -> str:
     """Extract and concatenate gold evidence sentences from FEVER annotation format.
 
     FEVER stores evidence as: list of annotation sets, each containing
     [annotation_id, evidence_id, wiki_title, sentence_idx].
-    We concatenate unique sentences identified by (wiki_title, sentence_idx).
-    Since raw text isn't stored in the dataset, we return titles + indices
-    as a placeholder — real text requires the Wikipedia dump or HF 'wiki_pages'.
+    We concatenate unique sentences by looking up actual text from wiki_page_map.
+
+    Args:
+        evidence_sets: nested list from HF dataset evidence field.
+        wiki_page_map: dict mapping page_title → list of sentence strings.
+            If provided, returns actual evidence text.
+            If None, returns title + index placeholders (for debugging only).
     """
     if not evidence_sets:
         return ""
@@ -80,8 +87,88 @@ def _concat_evidence_sentences(evidence_sets: list) -> str:
             key = (wiki_title, sent_idx)
             if key not in seen:
                 seen.add(key)
-                pieces.append(f"{wiki_title} (sentence {sent_idx})")
+                # Look up actual sentence text from wiki pages
+                if wiki_page_map and wiki_title in wiki_page_map:
+                    sents = wiki_page_map[wiki_title]
+                    if isinstance(sent_idx, int) and 0 <= sent_idx < len(sents):
+                        text = sents[sent_idx].strip()
+                        if text:
+                            pieces.append(text)
+                            continue
+                # Fallback: title as context (better than nothing)
+                pieces.append(wiki_title.replace("_", " "))
     return " . ".join(pieces)
+
+
+def _build_wiki_page_map(
+    ds,
+    cache_dir: str | None = None,
+) -> dict[str, list[str]]:
+    """Build mapping from wiki page title to list of sentence strings.
+
+    Tries multiple sources:
+    1. HF dataset 'wiki_pages' split (if available in ds).
+    2. Local wiki-pages JSONL file (if available in cache_dir or data/).
+    3. Empty dict (graceful degradation - uses page titles as evidence).
+    """
+    wiki_map: dict[str, list[str]] = {}
+
+    # Source 1: HF dataset wiki_pages split
+    if "wiki_pages" in ds:
+        logger.info("  Building wiki page map from HF wiki_pages split...")
+        wiki_data = ds["wiki_pages"]
+        for page in wiki_data:
+            title = page.get("id", page.get("title", ""))
+            lines_raw = page.get("lines", page.get("text", ""))
+            if not title or not lines_raw:
+                continue
+            # Parse FEVER wiki_pages format: "0\tsentence0\n1\tsentence1\n..."
+            sentences = []
+            if isinstance(lines_raw, str):
+                for line in lines_raw.split("\n"):
+                    parts = line.split("\t")
+                    if len(parts) >= 2:
+                        sent_text = parts[1].strip()
+                        if sent_text:
+                            sentences.append(sent_text)
+                        else:
+                            sentences.append("")  # placeholder for index alignment
+                    else:
+                        sentences.append("")
+            if sentences:
+                wiki_map[title] = sentences
+        logger.info(f"  Loaded {len(wiki_map)} pages from HF wiki_pages")
+        return wiki_map
+
+    # Source 2: Local JSONL file
+    for base in [cache_dir, "data", "."]:
+        if base is None:
+            continue
+        for fname in ["wiki-pages.jsonl", "wiki_pages.jsonl"]:
+            path = os.path.join(base, fname)
+            if os.path.exists(path):
+                logger.info(f"  Building wiki page map from {path}...")
+                with open(path) as f:
+                    for line_str in f:
+                        page = json.loads(line_str)
+                        title = page.get("id", "")
+                        lines_raw = page.get("lines", "")
+                        if not title or not lines_raw:
+                            continue
+                        sentences = []
+                        for line in lines_raw.split("\n"):
+                            parts = line.split("\t")
+                            if len(parts) >= 2:
+                                sentences.append(parts[1].strip())
+                            else:
+                                sentences.append("")
+                        if sentences:
+                            wiki_map[title] = sentences
+                logger.info(f"  Loaded {len(wiki_map)} pages from {path}")
+                return wiki_map
+
+    logger.warning("  No wiki_pages source found. Evidence text will use titles only.")
+    return wiki_map
 
 
 def load_fever_splits(
@@ -94,9 +181,8 @@ def load_fever_splits(
     Returns dict with 'train' and 'dev' keys, each containing list of dicts:
       {id, claim, label, label_id, gold_evidence_text}
 
-    NOTE: The HF FEVER dataset (fever/v1.0) contains claims and labels but
-    the evidence text requires joining with wiki_pages. For claims where
-    evidence is available, we extract it; for NEI claims, evidence is empty.
+    Evidence text is resolved by joining with the wiki_pages split of the
+    HF dataset.  When wiki_pages are unavailable, falls back to page titles.
     """
     try:
         from datasets import load_dataset
@@ -115,6 +201,18 @@ def load_fever_splits(
         except Exception:
             # Fallback: load from local jsonl if available
             return _load_fever_local_fallback(cache_dir)
+
+    # ── Build wiki page map for evidence text lookup ────────────
+    wiki_page_map = _build_wiki_page_map(ds, cache_dir)
+    if wiki_page_map:
+        logger.info(f"  Wiki page map: {len(wiki_page_map)} pages loaded")
+    else:
+        logger.warning(
+            "  Wiki page map empty — evidence will use page titles only. "
+            "This significantly hurts NLI accuracy. To fix: ensure the "
+            "'fever/v1.0' dataset includes wiki_pages split, or provide "
+            "local wiki-pages JSONL via cache_dir."
+        )
 
     result = {}
     for split_name, hf_split in [("train", "train"), ("dev", "labelled_dev")]:
@@ -137,7 +235,22 @@ def load_fever_splits(
         if max_n is not None and max_n < len(data):
             data = data.select(range(max_n))
 
+        # Collect all evidence page titles needed for this split
+        needed_titles = set()
+        for row in data:
+            evidence_raw = row.get("evidence", [])
+            for eset in (evidence_raw or []):
+                if not eset:
+                    continue
+                for ann in eset:
+                    if ann and len(ann) >= 4 and ann[2] is not None:
+                        needed_titles.add(ann[2])
+
+        # Lazy-load additional pages if needed and available
+        split_wiki_map = wiki_page_map  # use full map
+
         split_items = []
+        n_with_text = 0
         for row in data:
             label_raw = row.get("label", "NOT ENOUGH INFO")
             # HF fever dataset may store label as int (0=SUPPORTS,1=REFUTES,2=NEI)
@@ -146,9 +259,13 @@ def load_fever_splits(
             else:
                 label = _normalise_label(str(label_raw))
 
-            # Extract gold evidence text
+            # Extract gold evidence text with wiki page lookup
             evidence_raw = row.get("evidence", [])
-            gold_evidence = _concat_evidence_sentences(evidence_raw)
+            gold_evidence = _concat_evidence_sentences(
+                evidence_raw, wiki_page_map=split_wiki_map
+            )
+            if gold_evidence and not gold_evidence.startswith("("):
+                n_with_text += 1
 
             split_items.append({
                 "id": row.get("id", 0),
@@ -159,7 +276,11 @@ def load_fever_splits(
             })
 
         result[split_name] = split_items
-        logger.info(f"  {split_name}: {len(split_items)} examples")
+        logger.info(
+            f"  {split_name}: {len(split_items)} examples "
+            f"({n_with_text} with evidence text, "
+            f"{len(split_items) - n_with_text} without)"
+        )
 
     # Log split hashes for reproducibility
     for split_name, items in result.items():

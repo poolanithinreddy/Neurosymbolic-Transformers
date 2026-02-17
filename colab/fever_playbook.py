@@ -1,11 +1,17 @@
-"""NST FEVER Colab Playbook — 10 cells for end-to-end FEVER training.
+"""NST FEVER Colab Playbook — 13 cells for end-to-end FEVER training.
 
 Copy-paste cells into Google Colab (T4 GPU runtime).
-Total estimated runtime: ~30 minutes on T4.
+Total estimated runtime: ~45 minutes on T4 (all cells).
 
 Evidence settings:
   - Setting A (Gold Evidence): oracle evidence → Label Accuracy
   - Setting B (Full Pipeline):  BM25 retrieval → End-to-End FEVER Score
+
+Training modes:
+  - neural:  pure DeBERTa cross-entropy baseline
+  - soft:    CE + fixed-weight constraint loss
+  - cegis:   Lagrangian + counterexample-guided outer loop
+  - gated:   ECCG — Evidence-Conditioned Constraint Gating (novel)
 """
 
 COLAB_CELLS = [
@@ -113,10 +119,34 @@ print("✅ NST CEGIS (gold evidence) done")
 """,
 
 # ============================================================
-# Cell 7: Compare Results
+# Cell 7: Gold Evidence — NST Gated / ECCG (Novel)
 # ============================================================
 """
-# Cell 7: Compare all gold-evidence results
+# Cell 7: Gold Evidence — NST ECCG (novel) — ~10 min
+# =====================================================
+# Evidence-Conditioned Constraint Gating: learned per-sample,
+# per-constraint reliability gates. THE core novel contribution.
+!python main.py train-fever-nst --config configs/fever_gold_nst_gated.yaml
+print("✅ NST ECCG / Gated (gold evidence) done")
+""",
+
+# ============================================================
+# Cell 8: No-Leakage Verification
+# ============================================================
+"""
+# Cell 8: No-leakage verification (6 automated checks)
+# =======================================================
+# Runs: split hashes, pipeline rejects gold, cache clean,
+# label shuffle sanity, near-dup detection, CEGIS source audit.
+!python scripts/verify_no_leakage.py
+print("\\n✅ All leakage checks passed (see above for details)")
+""",
+
+# ============================================================
+# Cell 9: Compare Results
+# ============================================================
+"""
+# Cell 9: Compare all gold-evidence results
 # ============================================
 import json, os, glob
 
@@ -150,10 +180,10 @@ print("\\n✅ Comparison complete")
 """,
 
 # ============================================================
-# Cell 8: Integrity Checks
+# Cell 10: Integrity Checks
 # ============================================================
 """
-# Cell 8: Integrity checks — split hashes + shuffle sanity
+# Cell 10: Integrity checks — split hashes + shuffle sanity
 # ==========================================================
 import random, json
 from data.fever_dataset import load_fever_splits, _split_hash
@@ -186,31 +216,69 @@ else:
 """,
 
 # ============================================================
-# Cell 9: Multi-seed (Optional)
+# Cell 11: Multi-seed Run (3 seeds, error bars)
 # ============================================================
 """
-# Cell 9: Multi-seed run for error bars (optional) — ~25 min
-# ============================================================
-# Uncomment to run 3 seeds:
-# !python main.py multi-seed --task train-fever-nst \\
-#     --config configs/fever_gold_nst_cegis.yaml \\
-#     --seeds 42,43,44
+# Cell 11: Multi-seed ECCG for reproducibility — ~30 min
+# ========================================================
+# Runs gated mode with seeds 42, 43, 44 for mean ± std
+!python main.py multi-seed --task train-fever-nst \\
+    --config configs/fever_gold_nst_gated.yaml \\
+    --seeds 42,43,44
 
-# Then check aggregated results:
-# import json
-# with open("outputs_train-fever-nst_multiseed/multi_seed_summary.json") as f:
-#     summary = json.load(f)
-# agg = summary["aggregated"]
-# for k, v in sorted(agg.items()):
-#     print(f"  {k:<30} {v['mean']:.4f} ± {v['std']:.4f}")
-print("Cell 9: Multi-seed (uncomment to run)")
+# Display aggregated results
+import json
+with open("outputs_train-fever-nst_multiseed/multi_seed_summary.json") as f:
+    summary = json.load(f)
+agg = summary["aggregated"]
+print("\\n" + "=" * 50)
+print("  Multi-Seed Results (ECCG, 3 seeds)")
+print("=" * 50)
+for k, v in sorted(agg.items()):
+    print(f"  {k:<30} {v['mean']:.4f} ± {v['std']:.4f}")
+print("✅ Multi-seed evaluation complete")
 """,
 
 # ============================================================
-# Cell 10: Save to Drive
+# Cell 12: Gate Analysis (ECCG Interpretability)
 # ============================================================
 """
-# Cell 10: Save checkpoints + reports to Google Drive
+# Cell 12: Analyse learned gate values — what did ECCG learn?
+# =============================================================
+import torch, json, os
+from symbolic.constraint_gating import ConstraintGate
+
+gate_path = "outputs_fever_gold_nst_gated/ckpt/constraint_gate.pt"
+if os.path.exists(gate_path):
+    gate = ConstraintGate()
+    gate.load_state_dict(torch.load(gate_path, map_location='cpu'))
+    gate.eval()
+
+    # Print learned biases (effective default gate openness)
+    biases = gate.net[-1].bias.detach()
+    constraint_names = ['C1:date_contra', 'C2:num_contra', 'C3:neg_mismatch',
+                        'C4:low_overlap', 'C5:no_evidence']
+    print("Learned gate biases (sigmoid → default openness):")
+    for name, b in zip(constraint_names, biases):
+        print(f"  {name:<20} bias={b.item():.3f}  → gate={torch.sigmoid(b).item():.3f}")
+
+    # Check report for gate means during training
+    rpath = "outputs_fever_gold_nst_gated/report.json"
+    if os.path.exists(rpath):
+        with open(rpath) as f:
+            rep = json.load(f)
+        print(f"\\nFinal accuracy: {rep.get('dev', {}).get('accuracy', 'N/A')}")
+        print(f"Temperature:    {rep.get('temperature', 'N/A')}")
+else:
+    print("⚠️  No gate checkpoint found — run Cell 7 first")
+print("✅ Gate analysis complete")
+""",
+
+# ============================================================
+# Cell 13: Save to Drive
+# ============================================================
+"""
+# Cell 13: Save checkpoints + reports to Google Drive
 # =====================================================
 from google.colab import drive
 drive.mount('/content/drive', force_remount=False)

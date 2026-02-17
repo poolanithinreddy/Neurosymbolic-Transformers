@@ -1,10 +1,11 @@
 """FEVER training loop with NST constraint integration.
 
-Supports four modes (matching multi-digit/kinship pattern):
+Supports five modes (matching multi-digit/kinship pattern):
   1. neural:     pure DeBERTa cross-entropy (baseline)
   2. soft:       cross-entropy + fixed-weight constraint loss
   3. lagrangian: cross-entropy + adaptive Lagrangian constraint loss
   4. cegis:      Lagrangian + counterexample-guided outer loop
+  5. gated:      ECCG — Evidence-Conditioned Constraint Gating (novel)
 
 Training features:
   - Mixed precision (fp16/bf16) via torch.amp
@@ -44,6 +45,9 @@ from data.fever_dataset import (
 from models.fever_nli import build_fever_model, FeverNLIWrapper
 from symbolic.fever_constraints import extract_batch_facts
 from symbolic.fever_constraint_loss import fever_constraint_loss, verify_fever_constraints
+from symbolic.constraint_gating import (
+    ConstraintGate, gated_fever_constraint_loss, facts_to_gate_features,
+)
 from symbolic.lagrangian import (
     LagrangianState, lagrangian_loss, update_dual_variable,
     save_lambda_trajectory,
@@ -198,6 +202,7 @@ def train_fever_nst(
       - soft: CE + fixed λ * constraint_loss
       - lagrangian: CE + adaptive Lagrangian
       - cegis: Lagrangian + counterexample-guided outer loop
+      - gated: ECCG — learned per-sample, per-constraint gates
 
     Returns:
         Report dict with train/dev metrics.
@@ -212,52 +217,65 @@ def train_fever_nst(
         torch.cuda.manual_seed_all(seed)
 
     device = _auto_device(cfg.get("device", "auto"))
-    outdir = outdir_override or cfg.get("outdir", f"outputs_fever_{mode}")
+
+    # IO config — support both flat and nested
+    io_cfg = cfg.get("io", {})
+    outdir = outdir_override or io_cfg.get("out_dir", cfg.get("outdir", f"outputs_fever_{mode}"))
     os.makedirs(outdir, exist_ok=True)
 
-    # Training hyperparameters
+    # Training hyperparameters — support both nested 'train' and flat keys
     train_cfg = cfg.get("train", {})
-    epochs = int(train_cfg.get("epochs", 3))
-    batch_size = int(train_cfg.get("batch_size", 16))
-    lr = float(train_cfg.get("lr", 2e-5))
-    weight_decay = float(train_cfg.get("weight_decay", 0.01))
-    warmup_ratio = float(train_cfg.get("warmup_ratio", 0.1))
-    max_length = int(train_cfg.get("max_length", 256))
+    epochs = int(train_cfg.get("epochs", cfg.get("epochs", 3)))
+    batch_size = int(train_cfg.get("batch_size", cfg.get("batch_size", 16)))
+    lr = float(train_cfg.get("lr", cfg.get("lr", 2e-5)))
+    weight_decay = float(train_cfg.get("weight_decay", cfg.get("weight_decay", 0.01)))
+    warmup_ratio = float(train_cfg.get("warmup_ratio", cfg.get("warmup_ratio", 0.1)))
+    max_grad_norm = float(train_cfg.get("max_grad_norm", train_cfg.get("grad_clip", 1.0)))
     grad_accum_steps = int(train_cfg.get("grad_accum_steps", 1))
-    grad_clip = float(train_cfg.get("grad_clip", 1.0))
-    label_smoothing = float(train_cfg.get("label_smoothing", 0.0))
-    eval_every = int(train_cfg.get("eval_every", 1))
+    eval_every = int(train_cfg.get("eval_every", train_cfg.get("eval_every_steps", 1)))
     patience = int(train_cfg.get("patience", 5))
     num_workers = int(train_cfg.get("num_workers", 0))
     fp16 = train_cfg.get("fp16", device == "cuda")
 
-    # Model
-    model_name = cfg.get("model_name", "microsoft/deberta-v3-base")
+    # Model config — support nested 'model' section
+    model_cfg = cfg.get("model", {})
+    model_name = model_cfg.get("name", cfg.get("model_name", "microsoft/deberta-v3-base"))
+    label_smoothing = float(model_cfg.get("label_smoothing", cfg.get("label_smoothing", 0.0)))
+    dropout = float(model_cfg.get("dropout", cfg.get("dropout", 0.1)))
+    max_length = int(model_cfg.get("max_length", train_cfg.get("max_length", 256)))
 
-    # Data
+    # Data config
     data_cfg = cfg.get("data", {})
     max_train = data_cfg.get("max_train", None)
     max_dev = data_cfg.get("max_dev", None)
-    evidence_mode = data_cfg.get("evidence_mode", "gold")  # "gold" or "pipeline"
+    evidence_mode = data_cfg.get("evidence_mode", cfg.get("evidence_mode", "gold"))
     cache_dir = data_cfg.get("cache_dir", None)
 
-    # Constraint config
-    constraint_cfg = cfg.get("constraints", {})
-    constraint_lambda = float(constraint_cfg.get("lambda", 0.1))
-    constraint_weights = constraint_cfg.get("weights", {})
+    # Constraint config — support both 'logic' and 'constraints' sections
+    logic_cfg = cfg.get("logic", cfg.get("constraints", {}))
+    constraint_lambda = float(logic_cfg.get("lambda", logic_cfg.get("lambda_constraint", 0.1)))
+    constraint_weights = logic_cfg.get("constraint_weights", logic_cfg.get("weights", {}))
 
     # Lagrangian config
     lag_cfg = cfg.get("lagrangian", {})
-    lag_epsilon = float(lag_cfg.get("epsilon", 0.05))
-    lag_alpha = float(lag_cfg.get("alpha", 0.01))
+    lag_epsilon = float(lag_cfg.get("epsilon", logic_cfg.get("epsilon", 0.05)))
+    lag_alpha = float(lag_cfg.get("alpha", logic_cfg.get("lambda_lr", 0.01)))
     lag_rho = float(lag_cfg.get("rho", 1.0))
-    lag_lam_max = float(lag_cfg.get("lam_max", 10.0))
+    lag_lam_max = float(lag_cfg.get("lam_max", logic_cfg.get("lambda_max", 10.0)))
 
     # CEGIS config
     cegis_cfg = cfg.get("cegis", {})
     max_rounds = int(cegis_cfg.get("max_rounds", 5))
-    max_counterexamples = int(cegis_cfg.get("max_counterexamples", 500))
-    ce_oversample = int(cegis_cfg.get("ce_oversample", 3))
+    max_counterexamples = int(cegis_cfg.get("max_counterexamples",
+                                             cegis_cfg.get("mine_top_k", 500)))
+    ce_oversample = int(cegis_cfg.get("ce_oversample", cegis_cfg.get("oversample", 3)))
+
+    # Gated (ECCG) config
+    gate_cfg = cfg.get("gate", cfg.get("eccg", {}))
+    gate_hidden = int(gate_cfg.get("hidden_dim", 16))
+    gate_dropout = float(gate_cfg.get("dropout", 0.1))
+    gate_init_bias = float(gate_cfg.get("init_bias", 0.5))
+    gate_lr_mult = float(gate_cfg.get("lr_multiplier", 10.0))  # Gate learns faster than backbone
 
     # ── Load data ────────────────────────────────────────────
     logger.info("Loading FEVER dataset...")
@@ -299,8 +317,27 @@ def train_fever_nst(
     tokenizer, base_model = build_fever_model(
         model_name=model_name,
         label_smoothing=label_smoothing,
+        dropout=dropout,
     )
-    model = FeverNLIWrapper(base_model, label_smoothing=label_smoothing).to(device)
+
+    # Compute class weights for imbalanced FEVER labels
+    from collections import Counter
+    label_counts = Counter(it["label"] for it in splits["train"])
+    total_train = sum(label_counts.values())
+    n_classes = NUM_LABELS
+    class_weights = None
+    if total_train > 0:
+        class_weights = torch.tensor([
+            total_train / (n_classes * max(1, label_counts.get(FEVER_LABELS[i], 1)))
+            for i in range(n_classes)
+        ], dtype=torch.float32).to(device)
+        logger.info(f"Class weights: {class_weights.tolist()}")
+
+    model = FeverNLIWrapper(
+        base_model,
+        label_smoothing=label_smoothing,
+        class_weights=class_weights,
+    ).to(device)
 
     # ── DataLoaders ──────────────────────────────────────────
     pin_memory = device == "cuda"
@@ -314,8 +351,26 @@ def train_fever_nst(
     )
 
     # ── Optimizer + Scheduler ────────────────────────────────
+    # Build constraint gate for 'gated' mode
+    constraint_gate = None
+    if mode == "gated":
+        constraint_gate = ConstraintGate(
+            hidden_dim=gate_hidden,
+            dropout=gate_dropout,
+            init_bias=gate_init_bias,
+        ).to(device)
+        logger.info(f"ECCG gate params: {sum(p.numel() for p in constraint_gate.parameters())}")
+
+    # Separate param groups: backbone at lr, gate at lr * multiplier
+    param_groups = [{"params": list(model.parameters()), "lr": lr}]
+    if constraint_gate is not None:
+        param_groups.append({
+            "params": list(constraint_gate.parameters()),
+            "lr": lr * gate_lr_mult,
+        })
+
     optimizer = torch.optim.AdamW(
-        model.parameters(), lr=lr, weight_decay=weight_decay,
+        param_groups, lr=lr, weight_decay=weight_decay,
     )
     total_steps = epochs * math.ceil(len(train_ds) / batch_size / grad_accum_steps)
     warmup_steps = int(total_steps * warmup_ratio)
@@ -356,6 +411,8 @@ def train_fever_nst(
     print(f"  FEVER Training: mode={mode}, model={model_name}")
     print(f"  epochs={epochs}, bs={batch_size}, lr={lr}, device={device}")
     print(f"  evidence_mode={evidence_mode}, fp16={use_amp}")
+    if mode == "gated":
+        print(f"  ECCG gate: hidden={gate_hidden}, lr_mult={gate_lr_mult}")
     print(f"  total_steps={total_steps}, warmup={warmup_steps}")
     print(f"{'='*60}\n")
 
@@ -367,8 +424,10 @@ def train_fever_nst(
 
         # CEGIS: augment training data with counterexamples
         if mode == "cegis" and cegis_round > 0:
+            # IMPORTANT: Mine counterexamples from TRAINING set, NOT dev set.
+            # Mining from dev would constitute training on dev data = leakage.
             counterexamples = _mine_counterexamples(
-                model, dev_loader, device, max_ce=max_counterexamples,
+                model, train_loader, device, max_ce=max_counterexamples,
             )
             n_ce = len(counterexamples)
             logger.info(f"CEGIS round {cegis_round}: {n_ce} counterexamples found")
@@ -429,19 +488,33 @@ def train_fever_nst(
                     result = model(input_ids, attention_mask, labels)
                     loss_task = result["loss"]
 
-                    # Constraint loss (for soft/lagrangian/cegis modes)
+                    # Constraint loss (for soft/lagrangian/cegis/gated modes)
                     loss_constraint = torch.tensor(0.0, device=device)
+                    constraint_info = {}
                     if mode in ("soft", "lagrangian", "cegis"):
                         probs = result["probs"]
                         facts = extract_batch_facts(
                             batch["claims"], batch["evidences"],
                         )
-                        loss_constraint, _ = fever_constraint_loss(
+                        loss_constraint, constraint_info = fever_constraint_loss(
                             probs[:, LABEL2ID["SUPPORTS"]],
                             probs[:, LABEL2ID["REFUTES"]],
                             probs[:, LABEL2ID["NOT ENOUGH INFO"]],
                             facts,
                             weights=constraint_weights,
+                        )
+                    elif mode == "gated":
+                        probs = result["probs"]
+                        facts = extract_batch_facts(
+                            batch["claims"], batch["evidences"],
+                        )
+                        loss_constraint, constraint_info = gated_fever_constraint_loss(
+                            probs[:, LABEL2ID["SUPPORTS"]],
+                            probs[:, LABEL2ID["REFUTES"]],
+                            probs[:, LABEL2ID["NOT ENOUGH INFO"]],
+                            facts,
+                            gate=constraint_gate,
+                            base_weights=constraint_weights,
                         )
 
                     # Combine losses
@@ -449,6 +522,9 @@ def train_fever_nst(
                         loss = loss_task
                     elif mode == "soft":
                         loss = loss_task + lag_state.lam * loss_constraint
+                    elif mode == "gated":
+                        # ECCG: gated constraint loss with Lagrangian weighting
+                        loss = lagrangian_loss(loss_task, loss_constraint, lag_state)
                     elif mode in ("lagrangian", "cegis"):
                         loss = lagrangian_loss(loss_task, loss_constraint, lag_state)
                     else:
@@ -472,11 +548,11 @@ def train_fever_nst(
                 if (step + 1) % grad_accum_steps == 0:
                     if use_amp and scaler is not None:
                         scaler.unscale_(optimizer)
-                        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
                         scaler.step(optimizer)
                         scaler.update()
                     else:
-                        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
                         optimizer.step()
                     scheduler.step()
                     optimizer.zero_grad()
@@ -492,7 +568,7 @@ def train_fever_nst(
             avg_constraint = epoch_constraint_loss / max(1, n_steps)
 
             # Update Lagrangian
-            if mode in ("lagrangian", "cegis"):
+            if mode in ("lagrangian", "cegis", "gated"):
                 update_dual_variable(
                     lag_state, avg_constraint,
                     step=epoch + cegis_round * epochs,
@@ -549,6 +625,13 @@ def train_fever_nst(
 
     elapsed = time.time() - t0
 
+    # ── Post-hoc temperature scaling ───────────────────────
+    from eval.temperature_scaling import learn_temperature
+    print(f"\n{'─'*40}")
+    print("  Post-hoc temperature scaling (dev set)")
+    print(f"{'─'*40}")
+    optimal_T = learn_temperature(model, dev_loader, device)
+
     # ── Final evaluation ─────────────────────────────────────
     print(f"\n{'─'*40}")
     print("  Final evaluation on dev set")
@@ -573,6 +656,7 @@ def train_fever_nst(
         "dev": final_dev,
         "train_log": train_log,
         "final_lambda": round(lag_state.lam, 6),
+        "temperature": round(optimal_T, 4),
     }
     if cegis_log is not None:
         report["cegis"] = {
@@ -588,8 +672,15 @@ def train_fever_nst(
     logger.info(f"Report saved to {report_path}")
 
     # Save λ trajectory
-    if mode in ("lagrangian", "cegis"):
+    if mode in ("lagrangian", "cegis", "gated"):
         save_lambda_trajectory(lag_state, os.path.join(outdir, "lambda_trajectory.json"))
+
+    # Save gate weights
+    if constraint_gate is not None:
+        gate_path = os.path.join(outdir, "ckpt", "constraint_gate.pt")
+        os.makedirs(os.path.dirname(gate_path), exist_ok=True)
+        torch.save(constraint_gate.state_dict(), gate_path)
+        logger.info(f"Constraint gate saved to {gate_path}")
 
     # Save training log
     with open(os.path.join(outdir, "train_log.json"), "w") as f:

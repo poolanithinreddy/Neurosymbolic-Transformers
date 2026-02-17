@@ -85,11 +85,16 @@ class FeverNLIWrapper(nn.Module):
         self,
         model: nn.Module,
         label_smoothing: float = 0.0,
+        class_weights: torch.Tensor | None = None,
     ):
         super().__init__()
         self.model = model
         self.label_smoothing = label_smoothing
-        self.loss_fn = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+        # Class-weighted cross-entropy for FEVER label imbalance
+        self.loss_fn = nn.CrossEntropyLoss(
+            label_smoothing=label_smoothing,
+            weight=class_weights,
+        )
 
     def forward(
         self,
