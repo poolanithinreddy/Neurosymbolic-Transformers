@@ -1,0 +1,30 @@
+# Kinship Reasoning — Fixed λ constraint mode
+
+seed: 42
+device: auto
+mode: soft
+
+data:
+  n_train: 5000
+  n_test: 1000
+  max_train_depth: 3
+  max_test_depth: 5
+  max_seq_len: 256
+
+model:
+  d_model: 128
+  n_heads: 4
+  n_layers: 2
+  d_ff: 256
+  dropout: 0.1
+
+train:
+  epochs: 20
+  batch_size: 32
+  lr: 0.0003
+
+logic:
+  lambda: 0.5
+
+io:
+  out_dir: outputs_kinship_soft

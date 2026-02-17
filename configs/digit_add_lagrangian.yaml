@@ -1,0 +1,29 @@
+# Digit Addition — Lagrangian adaptive constraint mode
+# Uses augmented Lagrangian with learned dual variable λ
+
+seed: 42
+device: auto
+mode: lagrangian
+
+data:
+  n_train: 10000
+  n_test: 2000
+  comp_threshold: 9
+  img_size: 28
+  noise_std: 0.15
+
+train:
+  epochs: 15
+  batch_size: 64
+  lr: 0.001
+  warmup_steps: 0  # Not used in lagrangian mode
+
+lagrangian:
+  lambda_init: 0.0     # Start with no constraint weight
+  epsilon: 0.05         # Constraint tolerance (acceptable violation)
+  alpha: 0.01           # Dual step size
+  rho: 1.0              # Quadratic penalty coefficient
+  lambda_max: 10.0      # Upper bound to prevent divergence
+
+io:
+  out_dir: outputs_digit_add_lagrangian

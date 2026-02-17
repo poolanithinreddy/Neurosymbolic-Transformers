@@ -1,0 +1,34 @@
+# Kinship Reasoning — Lagrangian adaptive constraint mode
+
+seed: 42
+device: auto
+mode: lagrangian
+
+data:
+  n_train: 5000
+  n_test: 1000
+  max_train_depth: 3
+  max_test_depth: 5
+  max_seq_len: 256
+
+model:
+  d_model: 128
+  n_heads: 4
+  n_layers: 2
+  d_ff: 256
+  dropout: 0.1
+
+train:
+  epochs: 20
+  batch_size: 32
+  lr: 0.0003
+
+lagrangian:
+  lambda_init: 0.0
+  epsilon: 0.05
+  alpha: 0.01
+  rho: 1.0
+  lambda_max: 10.0
+
+io:
+  out_dir: outputs_kinship_lagrangian

@@ -1,0 +1,26 @@
+# Digit Addition — Hard Constraint Mode
+# Soft constraints during training + Z3 repair at inference
+
+mode: "hard"
+device: "auto"
+seed: 42
+
+io:
+  out_dir: "outputs_digit_add_hard"
+
+data:
+  n_train: 10000
+  n_test: 2000
+  comp_threshold: 9
+  img_size: 28
+  noise_std: 0.15
+
+train:
+  epochs: 15
+  batch_size: 64
+  lr: 1.0e-3
+  warmup_steps: 200
+
+logic:
+  lambda: 0.5
+  cagrad_c: 0.0
