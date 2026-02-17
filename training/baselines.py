@@ -37,6 +37,7 @@ from symbolic.lagrangian import (
     update_dual_variable,
     save_lambda_trajectory,
 )
+from training.config_validation import load_and_validate_config
 
 logger = logging.getLogger("baselines")
 
@@ -86,7 +87,31 @@ def _resolve_cfg(raw_cfg: dict) -> dict:
         "lagrangian_alpha": float(_get("alpha", 0.01, lagrangian, cegis)),
         "lagrangian_rho": float(_get("rho", 1.0, lagrangian, cegis)),
         "lagrangian_lam_max": float(_get("lam_max", 10.0, lagrangian, cegis)),
+        "grad_clip": float(_get("grad_clip", 1.0, training, cegis, baseline)),
+        # Quick-mode overrides
+        "eval_every": int(_get("eval_every", 5, baseline, training)),
+        "dev_subset_size": int(_get("dev_subset_size", 500, baseline)),
+        "max_rounds_quick": int(_get("max_rounds_quick", 3, baseline)),
+        "quick_epochs": int(_get("quick_epochs", 5, baseline)),
     }
+
+
+def _fmt_eta(elapsed: float, done: int, total: int) -> str:
+    """Format ETA string from elapsed time and progress."""
+    if done <= 0:
+        return "ETA: ?"
+    eta = elapsed / done * (total - done)
+    if eta < 60:
+        return f"ETA: {eta:.0f}s"
+    return f"ETA: {eta / 60:.1f}min"
+
+
+def _check_loss_nan(loss: torch.Tensor, round_num: int, method: str) -> bool:
+    """Return True if loss is NaN/Inf, logging an error."""
+    if torch.isnan(loss) or torch.isinf(loss):
+        logger.error("[%s] NaN/Inf loss at round %d — aborting", method, round_num)
+        return True
+    return False
 
 
 # ─────────────────────────────────────────────────────────────
@@ -98,6 +123,7 @@ def train_random_replay(
     outdir_override: str | None = None,
     task: str = "multi_digit",
     seed: int | None = None,
+    quick: bool = False,
 ) -> dict:
     """Train with random replay: same data budget as CEGIS but random augmentation.
 
@@ -105,19 +131,19 @@ def train_random_replay(
     examples from the training set and add them to a replay buffer. This
     matches CEGIS's data augmentation budget without targeted selection.
     """
-    with open(config_path) as f:
-        raw_cfg = yaml.safe_load(f)
+    raw_cfg = load_and_validate_config(config_path)
 
     p = _resolve_cfg(raw_cfg)
     data_cfg = raw_cfg.get("data", {})
 
-    max_rounds = p["max_rounds"]
-    inner_epochs = p["inner_epochs"]
+    max_rounds = p["max_rounds_quick"] if quick else p["max_rounds"]
+    inner_epochs = p["quick_epochs"] if quick else p["inner_epochs"]
     lr = p["lr"]
     batch_size = p["batch_size"]
     _seed = int(seed if seed is not None else p["seed"])
     max_ce = p["max_counterexamples"]
     ce_oversample = p["ce_oversample"]
+    grad_clip = p["grad_clip"]
     device = _auto_device(p["device"])
     outdir = outdir_override or p["outdir"] or "outputs_random_replay"
     os.makedirs(outdir, exist_ok=True)
@@ -151,6 +177,10 @@ def train_random_replay(
 
     replay_buffer: list[int] = []  # indices into train_ds
     history = []
+    t_start = time.time()
+
+    print(f"[Random Replay] {max_rounds} rounds × {inner_epochs} epochs"
+          f"{'  (quick mode)' if quick else ''}")
 
     for round_num in range(1, max_rounds + 1):
         t0 = time.time()
@@ -169,6 +199,7 @@ def train_random_replay(
         model.train()
 
         total_loss = total_constraint = total_csr = n_batches = 0
+        nan_abort = False
         for epoch in range(inner_epochs):
             for batch in loader:
                 batch_dev = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
@@ -179,15 +210,23 @@ def train_random_replay(
                                sum_hundreds=batch_dev.get("sum_hundreds"))
 
                 loss = lagrangian_loss(result["loss_digit"], result["loss_constraint"], lag_state)
+
+                if _check_loss_nan(loss, round_num, "Random Replay"):
+                    nan_abort = True
+                    break
+
                 optimizer.zero_grad()
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
                 optimizer.step()
 
                 total_loss += loss.item()
                 total_constraint += result["loss_constraint"].item()
                 total_csr += result.get("csr", 0.0)
                 n_batches += 1
+
+            if nan_abort:
+                break
 
             avg_c = total_constraint / max(n_batches, 1)
             update_dual_variable(lag_state, avg_c, step=round_num * inner_epochs + epoch)
@@ -204,10 +243,17 @@ def train_random_replay(
             "replay_size": len(replay_buffer),
             "elapsed_s": round(elapsed, 2),
         })
-        print(f"  [Random Replay] Round {round_num}: loss={avg_loss:.4f} CSR={avg_csr:.3f} λ={lag_state.lam:.3f}")
+        eta = _fmt_eta(time.time() - t_start, round_num, max_rounds)
+        print(f"  [Random Replay] Round {round_num}/{max_rounds}: "
+              f"loss={avg_loss:.4f} CSR={avg_csr:.3f} λ={lag_state.lam:.3f}  "
+              f"({elapsed:.1f}s, {eta})")
+
+        if nan_abort:
+            break
 
     # Save
-    report = {"method": "random_replay", "history": history, "final_lambda": lag_state.lam}
+    report = {"method": "random_replay", "history": history, "final_lambda": lag_state.lam,
+              "nan_abort": nan_abort, "quick": quick}
     with open(os.path.join(outdir, "report.json"), "w") as f:
         json.dump(report, f, indent=2)
     torch.save(model.state_dict(), os.path.join(outdir, "model.pt"))
@@ -224,6 +270,7 @@ def train_hard_mining(
     outdir_override: str | None = None,
     task: str = "multi_digit",
     seed: int | None = None,
+    quick: bool = False,
 ) -> dict:
     """Train with hard example mining: select highest-loss samples each round.
 
@@ -231,19 +278,19 @@ def train_hard_mining(
     Instead of constraint violations, we mine samples with highest cross-entropy
     loss and add them to the replay buffer.
     """
-    with open(config_path) as f:
-        raw_cfg = yaml.safe_load(f)
+    raw_cfg = load_and_validate_config(config_path)
 
     p = _resolve_cfg(raw_cfg)
     data_cfg = raw_cfg.get("data", {})
 
-    max_rounds = p["max_rounds"]
-    inner_epochs = p["inner_epochs"]
+    max_rounds = p["max_rounds_quick"] if quick else p["max_rounds"]
+    inner_epochs = p["quick_epochs"] if quick else p["inner_epochs"]
     lr = p["lr"]
     batch_size = p["batch_size"]
     _seed = int(seed if seed is not None else p["seed"])
     max_ce = p["max_counterexamples"]
     ce_oversample = p["ce_oversample"]
+    grad_clip = p["grad_clip"]
     device = _auto_device(p["device"])
     outdir = outdir_override or p["outdir"] or "outputs_hard_mining"
     os.makedirs(outdir, exist_ok=True)
@@ -281,13 +328,21 @@ def train_hard_mining(
 
     hard_buffer: list[dict] = []
     history = []
+    t_start = time.time()
+
+    # In quick mode, use a smaller mining subset for speed
+    mining_subset_size = min(p["dev_subset_size"], len(mine_ds)) if quick else len(mine_ds)
+
+    print(f"[Hard Mining] {max_rounds} rounds × {inner_epochs} epochs"
+          f"{'  (quick mode)' if quick else ''}")
 
     for round_num in range(1, max_rounds + 1):
         t0 = time.time()
 
         # Mine hard examples by loss
         model.eval()
-        mine_loader = DataLoader(mine_ds, batch_size=batch_size, collate_fn=collate_fn, shuffle=False)
+        mine_subset = Subset(mine_ds, list(range(mining_subset_size)))
+        mine_loader = DataLoader(mine_subset, batch_size=batch_size, collate_fn=collate_fn, shuffle=False)
         sample_losses = []
 
         with torch.no_grad():
@@ -325,6 +380,7 @@ def train_hard_mining(
         model.train()
 
         total_loss = total_constraint = total_csr = n_batches = 0
+        nan_abort = False
         for epoch in range(inner_epochs):
             for batch in loader:
                 batch_dev = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
@@ -335,15 +391,23 @@ def train_hard_mining(
                                sum_hundreds=batch_dev.get("sum_hundreds"))
 
                 loss = lagrangian_loss(result["loss_digit"], result["loss_constraint"], lag_state)
+
+                if _check_loss_nan(loss, round_num, "Hard Mining"):
+                    nan_abort = True
+                    break
+
                 optimizer.zero_grad()
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
                 optimizer.step()
 
                 total_loss += loss.item()
                 total_constraint += result["loss_constraint"].item()
                 total_csr += result.get("csr", 0.0)
                 n_batches += 1
+
+            if nan_abort:
+                break
 
             avg_c = total_constraint / max(n_batches, 1)
             update_dual_variable(lag_state, avg_c, step=round_num * inner_epochs + epoch)
@@ -360,9 +424,16 @@ def train_hard_mining(
             "buffer_size": len(hard_buffer),
             "elapsed_s": round(elapsed, 2),
         })
-        print(f"  [Hard Mining] Round {round_num}: loss={avg_loss:.4f} CSR={avg_csr:.3f}")
+        eta = _fmt_eta(time.time() - t_start, round_num, max_rounds)
+        print(f"  [Hard Mining] Round {round_num}/{max_rounds}: "
+              f"loss={avg_loss:.4f} CSR={avg_csr:.3f}  "
+              f"({elapsed:.1f}s, {eta})")
 
-    report = {"method": "hard_mining", "history": history, "final_lambda": lag_state.lam}
+        if nan_abort:
+            break
+
+    report = {"method": "hard_mining", "history": history, "final_lambda": lag_state.lam,
+              "nan_abort": nan_abort, "quick": quick}
     with open(os.path.join(outdir, "report.json"), "w") as f:
         json.dump(report, f, indent=2)
     torch.save(model.state_dict(), os.path.join(outdir, "model.pt"))
@@ -379,6 +450,7 @@ def train_same_budget(
     outdir_override: str | None = None,
     task: str = "multi_digit",
     seed: int | None = None,
+    quick: bool = False,
 ) -> dict:
     """Train for the same total compute budget as CEGIS, but without replay.
 
@@ -386,19 +458,19 @@ def train_same_budget(
     straight through with Lagrangian only. Controls for CEGIS simply getting
     more total gradient updates.
     """
-    with open(config_path) as f:
-        raw_cfg = yaml.safe_load(f)
+    raw_cfg = load_and_validate_config(config_path)
 
     p = _resolve_cfg(raw_cfg)
     data_cfg = raw_cfg.get("data", {})
 
-    max_rounds = p["max_rounds"]
-    inner_epochs = p["inner_epochs"]
+    max_rounds = p["max_rounds_quick"] if quick else p["max_rounds"]
+    inner_epochs = p["quick_epochs"] if quick else p["inner_epochs"]
     total_epochs = max_rounds * inner_epochs
 
     lr = p["lr"]
     batch_size = p["batch_size"]
     _seed = int(seed if seed is not None else p["seed"])
+    grad_clip = p["grad_clip"]
     device = _auto_device(p["device"])
     outdir = outdir_override or p["outdir"] or "outputs_same_budget"
     os.makedirs(outdir, exist_ok=True)
@@ -432,8 +504,13 @@ def train_same_budget(
     )
 
     history = []
-    print(f"[Same Budget] Training for {total_epochs} epochs (= {max_rounds} rounds × {inner_epochs} epochs)")
+    eval_every = p["eval_every"]
+    t_start = time.time()
 
+    print(f"[Same Budget] {total_epochs} epochs (= {max_rounds} × {inner_epochs})"
+          f"{'  (quick mode)' if quick else ''}")
+
+    nan_abort = False
     for epoch in range(1, total_epochs + 1):
         model.train()
         total_loss = total_constraint = total_csr = n_batches = 0
@@ -447,9 +524,14 @@ def train_same_budget(
                            sum_hundreds=batch_dev.get("sum_hundreds"))
 
             loss = lagrangian_loss(result["loss_digit"], result["loss_constraint"], lag_state)
+
+            if _check_loss_nan(loss, epoch, "Same Budget"):
+                nan_abort = True
+                break
+
             optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
             optimizer.step()
 
             total_loss += loss.item()
@@ -457,14 +539,19 @@ def train_same_budget(
             total_csr += result.get("csr", 0.0)
             n_batches += 1
 
+        if nan_abort:
+            break
+
         avg_loss = total_loss / max(n_batches, 1)
         avg_constraint = total_constraint / max(n_batches, 1)
         avg_csr = total_csr / max(n_batches, 1)
 
         update_dual_variable(lag_state, avg_constraint, step=epoch, loss_task=avg_loss)
 
-        if epoch % 10 == 0 or epoch == total_epochs:
-            print(f"  Epoch {epoch}/{total_epochs}: loss={avg_loss:.4f} CSR={avg_csr:.3f} λ={lag_state.lam:.3f}")
+        if epoch % eval_every == 0 or epoch == total_epochs:
+            eta = _fmt_eta(time.time() - t_start, epoch, total_epochs)
+            print(f"  Epoch {epoch}/{total_epochs}: loss={avg_loss:.4f} "
+                  f"CSR={avg_csr:.3f} λ={lag_state.lam:.3f}  ({eta})")
             history.append({
                 "epoch": epoch,
                 "loss": round(avg_loss, 4),
@@ -472,7 +559,8 @@ def train_same_budget(
                 "lambda": round(lag_state.lam, 4),
             })
 
-    report = {"method": "same_budget", "total_epochs": total_epochs, "history": history, "final_lambda": lag_state.lam}
+    report = {"method": "same_budget", "total_epochs": total_epochs, "history": history,
+              "final_lambda": lag_state.lam, "nan_abort": nan_abort, "quick": quick}
     with open(os.path.join(outdir, "report.json"), "w") as f:
         json.dump(report, f, indent=2)
     torch.save(model.state_dict(), os.path.join(outdir, "model.pt"))

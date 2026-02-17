@@ -78,10 +78,17 @@ class CEGISConfig:
     @classmethod
     def from_yaml(cls, path: str) -> "CEGISConfig":
         import yaml
+        from training.config_validation import cast_value
         with open(path) as f:
             d = yaml.safe_load(f)
         cegis_d = d.get("cegis", d)
-        return cls(**{k: v for k, v in cegis_d.items() if k in cls.__dataclass_fields__})
+        # Explicitly cast every field to its declared type so YAML strings
+        # like '1e-3' become proper floats.
+        typed = {}
+        for k, v in cegis_d.items():
+            if k in cls.__dataclass_fields__:
+                typed[k] = cast_value(k, v)
+        return cls(**typed)
 
 
 @dataclass

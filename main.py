@@ -221,9 +221,10 @@ def cmd_baseline(args):
     }
     train_fn = dispatch[args.method]
     seeds = parse_seeds(args.seeds) if args.seeds else [42]
+    quick = getattr(args, "quick", False)
     for seed in seeds:
         outdir = args.outdir or f"outputs_{args.method.replace('-', '_')}_s{seed}"
-        report = train_fn(args.config, outdir_override=outdir, seed=seed)
+        report = train_fn(args.config, outdir_override=outdir, seed=seed, quick=quick)
         print(f"\n[{args.method}] seed={seed}  report → {outdir}")
 
 
@@ -351,6 +352,8 @@ def main():
     p_bl.add_argument("--config", required=True, help="YAML config path")
     p_bl.add_argument("--seeds", default=None, help="Comma-separated seeds (default: 42)")
     p_bl.add_argument("--outdir", default=None, help="Override output directory")
+    p_bl.add_argument("--quick", action="store_true",
+                      help="Quick mode: fewer rounds/epochs for smoke testing")
 
     # latency
     p_lat = subparsers.add_parser("latency", help="Benchmark inference latency")

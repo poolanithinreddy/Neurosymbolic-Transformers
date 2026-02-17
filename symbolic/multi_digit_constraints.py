@@ -134,9 +134,12 @@ def verify_multi_digit(
 ) -> tuple[torch.Tensor, float]:
     """Verify arithmetic constraints on predictions (hard check).
 
+    NaN-safe: any sample containing NaN in its predictions is treated as
+    a constraint violation (CSR must never silently become 1.0 due to NaN).
+
     Returns:
         violations: [B] boolean tensor (True = violated).
-        csr: constraint satisfaction rate.
+        csr: constraint satisfaction rate (0.0–1.0).
     """
     a = pred_a_tens * 10 + pred_a_ones
     b = pred_b_tens * 10 + pred_b_ones
@@ -144,6 +147,16 @@ def verify_multi_digit(
     s_true = a + b
 
     violations = s_pred != s_true
+
+    # NaN guard: mark any sample with NaN predictions as a violation
+    has_nan = (
+        torch.isnan(pred_a_tens.float()) | torch.isnan(pred_a_ones.float()) |
+        torch.isnan(pred_b_tens.float()) | torch.isnan(pred_b_ones.float()) |
+        torch.isnan(pred_s_ones.float()) | torch.isnan(pred_s_tens.float()) |
+        torch.isnan(pred_s_hund.float())
+    )
+    violations = violations | has_nan
+
     csr = 1.0 - violations.float().mean().item()
     return violations, csr
 

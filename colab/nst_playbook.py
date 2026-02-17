@@ -1,4 +1,4 @@
-"""NST Colab Playbook v4 — Neural CEGIS Full Experiment Suite.
+"""NST Colab Playbook v5 — Neural CEGIS Full Experiment Suite.
 
 Copy-paste cells for end-to-end execution on Google Colab (T4 GPU).
 Runs all experiments for the Neural CEGIS paper:
@@ -8,6 +8,8 @@ Runs all experiments for the Neural CEGIS paper:
   - Multi-seed runs for error bars
   - Latency benchmark
   - Publication-ready plots and tables
+
+All commands are NON-INTERACTIVE — no keyboard input required.
 
 Total estimated runtime: ~3 hours on a T4 GPU (full suite).
 Quick mode: ~40 minutes (single seed).
@@ -42,10 +44,45 @@ print(f"GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'N
 """,
 
 # ============================================================
-# Cell 2: Dataset Statistics
+# Cell 2: Fix line endings (if cloned on Windows / mixed env)
 # ============================================================
 """
-# Cell 2: Dataset Statistics
+# Cell 2a: Fix line endings (bash + sed — works on Linux/Colab)
+# ==============================================================
+# Only needed if you see errors like '/bin/bash^M: bad interpreter'
+
+!sed -i 's/\\r$//' run_all.sh
+!chmod +x run_all.sh
+print("Line endings fixed (bash method).")
+""",
+
+# ============================================================
+# Cell 2b: Fix line endings (pure Python — no heredoc)
+# ============================================================
+"""
+# Cell 2b: Fix line endings (pure Python, no heredoc)
+# =====================================================
+# Use this if the bash version above fails.
+
+import pathlib
+for f in pathlib.Path('.').rglob('*.sh'):
+    text = f.read_bytes()
+    if b'\\r\\n' in text:
+        f.write_bytes(text.replace(b'\\r\\n', b'\\n'))
+        print(f"Fixed: {f}")
+for f in pathlib.Path('.').rglob('*.py'):
+    text = f.read_bytes()
+    if b'\\r\\n' in text:
+        f.write_bytes(text.replace(b'\\r\\n', b'\\n'))
+        print(f"Fixed: {f}")
+print("Done.")
+""",
+
+# ============================================================
+# Cell 3: Dataset Statistics
+# ============================================================
+"""
+# Cell 3: Dataset Statistics
 # ===========================
 
 # Multi-digit addition (the HARD benchmark)
@@ -58,11 +95,26 @@ print()
 """,
 
 # ============================================================
-# Cell 3: Multi-Digit — All Methods (3 seeds)
+# Cell 4: Run ALL experiments (non-interactive)
 # ============================================================
 """
-# Cell 3: Multi-Digit Addition — All Methods (3 seeds)
+# Cell 4: Run ALL experiments via run_all.sh
+# ============================================
+# This is FULLY NON-INTERACTIVE. No keyboard input required.
+# --quick: single seed, reduced epochs (~15 min)
+# Remove --quick for full suite (~3 hrs on T4)
+
+# NON-INTERACTIVE: stdin is /dev/null, no prompts possible
+!bash ./run_all.sh --quick 2>&1
+""",
+
+# ============================================================
+# Cell 5: Manual Multi-Digit — All Methods (3 seeds)
+# ============================================================
+"""
+# Cell 5: Multi-Digit Addition — All Methods (3 seeds)
 # ======================================================
+# Use this cell INSTEAD of Cell 4 if you want fine-grained control.
 # ~30 min total.  Neural baseline should FAIL on carry splits.
 # CEGIS should close the compositional gap.
 
@@ -82,35 +134,34 @@ SEEDS = "42,43,44"
 """,
 
 # ============================================================
-# Cell 4: Controlled Baselines
+# Cell 6: Controlled Baselines (with --quick)
 # ============================================================
 """
-# Cell 4: Controlled Baselines (3 seeds)
-# ========================================
-# These isolate what CEGIS actually contributes.
-# If CEGIS beats all three, the improvement is from
-# constraint-targeted counterexamples, not extra data.
+# Cell 6: Controlled Baselines
+# ===============================
+# --quick: 3 rounds × 5 epochs (fast smoke test)
+# Remove --quick for full training (10 rounds × 15 epochs)
 
 SEEDS = "42,43,44"
 
 # Random Replay — same data budget, random samples
 !python main.py baseline --method random-replay \\
-    --config configs/multi_digit_random_replay.yaml --seeds {SEEDS}
+    --config configs/multi_digit_random_replay.yaml --seeds {SEEDS} --quick
 
 # Hard Example Mining — highest-loss samples, not constraint violations
 !python main.py baseline --method hard-mining \\
-    --config configs/multi_digit_hard_mining.yaml --seeds {SEEDS}
+    --config configs/multi_digit_hard_mining.yaml --seeds {SEEDS} --quick
 
 # Same Budget — train K×E epochs with Lagrangian only
 !python main.py baseline --method same-budget \\
-    --config configs/multi_digit_same_budget.yaml --seeds {SEEDS}
+    --config configs/multi_digit_same_budget.yaml --seeds {SEEDS} --quick
 """,
 
 # ============================================================
-# Cell 5: Kinship — All Methods (3 seeds)
+# Cell 7: Kinship — All Methods (3 seeds)
 # ============================================================
 """
-# Cell 5: Kinship Relational Reasoning — All Methods (3 seeds)
+# Cell 7: Kinship Relational Reasoning — All Methods (3 seeds)
 # ==============================================================
 # Train depth 1-3, test depth 4-6. With distractors + balanced labels.
 
@@ -130,10 +181,10 @@ SEEDS = "42,43,44"
 """,
 
 # ============================================================
-# Cell 6: CEGIS Convergence Analysis
+# Cell 8: CEGIS Convergence Analysis
 # ============================================================
 """
-# Cell 6: CEGIS Convergence Analysis
+# Cell 8: CEGIS Convergence Analysis
 # ====================================
 # Print the counterexample trajectory — the signature CEGIS result.
 
@@ -156,10 +207,10 @@ for d in cegis_dirs:
 """,
 
 # ============================================================
-# Cell 7: Latency Benchmark
+# Cell 9: Latency Benchmark
 # ============================================================
 """
-# Cell 7: Inference Latency Benchmark
+# Cell 9: Inference Latency Benchmark
 # =====================================
 
 !mkdir -p results
@@ -178,10 +229,10 @@ for entry in lat:
 """,
 
 # ============================================================
-# Cell 8: Generate Plots + Tables
+# Cell 10: Generate Plots + Tables
 # ============================================================
 """
-# Cell 8: Plots + Tables
+# Cell 10: Plots + Tables
 # ========================
 
 !mkdir -p figures results
@@ -213,10 +264,10 @@ for f in ["results/multi_digit_results.md", "results/kinship_results.md"]:
 """,
 
 # ============================================================
-# Cell 9: Full Results Summary
+# Cell 11: Results Summary
 # ============================================================
 """
-# Cell 9: Results Summary
+# Cell 11: Results Summary
 # =========================
 
 import json, os, glob
@@ -240,6 +291,10 @@ for rf in report_files:
     print(f"  {name}")
     print(f"{'─'*50}")
 
+    # Check for NaN abort
+    if report.get("nan_abort"):
+        print("  ⚠ Training aborted due to NaN — results are partial.")
+
     for key in ["iid_test", "comp_test", "hard_test"]:
         if key in report:
             m = report[key]
@@ -262,7 +317,51 @@ print("  on comp_test and hard_test (carry generalisation)")
 print(f"{'='*70}")
 """,
 
+# ============================================================
+# Cell 12: Save results to Google Drive
+# ============================================================
+"""
+# Cell 12: Save results to Google Drive
+# ========================================
+# Zips all outputs and saves to your Google Drive.
+
+from google.colab import drive
+import shutil, datetime, os
+
+drive.mount('/content/drive')
+
+ts = datetime.datetime.now().strftime("%Y%m%d_%H%M")
+zip_name = f"nst_results_{ts}"
+
+# Create zip of all output directories
+os.makedirs("/tmp/nst_export", exist_ok=True)
+import glob
+for d in glob.glob("outputs_*"):
+    if os.path.isdir(d):
+        shutil.copytree(d, f"/tmp/nst_export/{d}", dirs_exist_ok=True)
+for d in ["results", "figures"]:
+    if os.path.isdir(d):
+        shutil.copytree(d, f"/tmp/nst_export/{d}", dirs_exist_ok=True)
+
+shutil.make_archive(f"/tmp/{zip_name}", "zip", "/tmp/nst_export")
+
+dest = f"/content/drive/MyDrive/{zip_name}.zip"
+shutil.move(f"/tmp/{zip_name}.zip", dest)
+print(f"\\n✅ Results saved to Google Drive: {dest}")
+print(f"   Size: {os.path.getsize(dest) / 1e6:.1f} MB")
+""",
+
 ]  # end COLAB_CELLS
+
+
+# ── NOTE on Colab keepalive ──────────────────────────────────
+# Do NOT use JavaScript auto-click keepalive snippets. They can:
+#   1. Trigger Google's anti-abuse detection
+#   2. Cause session termination
+# Instead:
+#   - Use Colab Pro for longer runtimes
+#   - Use --quick mode for initial testing
+#   - Accept that free-tier sessions may disconnect after 90 min idle
 
 
 def print_playbook():

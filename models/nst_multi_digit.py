@@ -173,10 +173,16 @@ class MultiDigitModel(nn.Module):
             result["loss_digit"] = loss_digits
 
             if self.mode == "neural" and sum_ones is not None:
+                # NOTE: probs_s_* are softmax outputs (probabilities).  Use
+                # F.nll_loss(log(p), target) — NOT F.cross_entropy(log(p)),
+                # which would apply log_softmax *again* → double-log → NaN.
+                log_p_s_ones = torch.log(result["probs_s_ones"].clamp(min=1e-8))
+                log_p_s_tens = torch.log(result["probs_s_tens"].clamp(min=1e-8))
+                log_p_s_hund = torch.log(result["probs_s_hund"].clamp(min=1e-8))
                 loss_sum = (
-                    F.cross_entropy(result["probs_s_ones"].log().clamp(min=-20), sum_ones) +
-                    F.cross_entropy(result["probs_s_tens"].log().clamp(min=-20), sum_tens) +
-                    F.cross_entropy(result["probs_s_hund"].log().clamp(min=-20), sum_hundreds)
+                    F.nll_loss(log_p_s_ones, sum_ones) +
+                    F.nll_loss(log_p_s_tens, sum_tens) +
+                    F.nll_loss(log_p_s_hund, sum_hundreds)
                 )
                 result["loss_sum"] = loss_sum
                 result["loss_constraint"] = torch.tensor(0.0, device=img_a.device)
