@@ -1,10 +1,16 @@
-"""NST Colab Playbook v3 — Neural CEGIS Full Experiment Suite.
+"""NST Colab Playbook v4 — Neural CEGIS Full Experiment Suite.
 
 Copy-paste cells for end-to-end execution on Google Colab (T4 GPU).
-Runs all ablations: single-digit, multi-digit (neural/soft/lagrangian/CEGIS),
-and kinship relational reasoning.
+Runs all experiments for the Neural CEGIS paper:
+  - Multi-digit addition (neural, soft, lagrangian, CEGIS)
+  - Controlled baselines (random replay, hard mining, same budget)
+  - Kinship relational reasoning (neural, lagrangian, CEGIS)
+  - Multi-seed runs for error bars
+  - Latency benchmark
+  - Publication-ready plots and tables
 
-Total estimated runtime: ~40 minutes on a T4 GPU.
+Total estimated runtime: ~3 hours on a T4 GPU (full suite).
+Quick mode: ~40 minutes (single seed).
 """
 
 COLAB_CELLS = [
@@ -42,11 +48,6 @@ print(f"GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'N
 # Cell 2: Dataset Statistics
 # ===========================
 
-# Single-digit addition
-!python main.py data-stats --threshold 9
-
-print()
-
 # Multi-digit addition (the HARD benchmark)
 !python main.py multi-digit-stats
 
@@ -57,112 +58,162 @@ print()
 """,
 
 # ============================================================
-# Cell 3: Single-Digit Ablation (baseline sanity check)
+# Cell 3: Multi-Digit — All Methods (3 seeds)
 # ============================================================
 """
-# Cell 3: Single-Digit Addition Ablation
+# Cell 3: Multi-Digit Addition — All Methods (3 seeds)
+# ======================================================
+# ~30 min total.  Neural baseline should FAIL on carry splits.
+# CEGIS should close the compositional gap.
+
+SEEDS = "42,43,44"
+
+# Pure Neural
+!python main.py multi-seed --task train-multi-digit \\
+    --config configs/multi_digit_neural.yaml --seeds {SEEDS}
+
+# NST-Lagrangian
+!python main.py multi-seed --task train-multi-digit \\
+    --config configs/multi_digit_lagrangian.yaml --seeds {SEEDS}
+
+# Neural CEGIS (the core contribution)
+!python main.py multi-seed --task train-cegis \\
+    --config configs/multi_digit_cegis.yaml --seeds {SEEDS}
+""",
+
+# ============================================================
+# Cell 4: Controlled Baselines
+# ============================================================
+"""
+# Cell 4: Controlled Baselines (3 seeds)
 # ========================================
-# ~5 min total — proves ALL methods reach 100% on easy benchmark
+# These isolate what CEGIS actually contributes.
+# If CEGIS beats all three, the improvement is from
+# constraint-targeted counterexamples, not extra data.
 
-import yaml, os
+SEEDS = "42,43,44"
 
-modes = ["neural", "soft", "lagrangian"]
-for mode in modes:
-    cfg = {
-        "model": {"mode": mode, "constraint_mode": mode},
-        "data": {"n_train": 3000, "n_test": 500, "threshold": 9, "seed": 42},
-        "training": {
-            "epochs": 15,
-            "lr": 0.001,
-            "batch_size": 64,
-            "device": "auto",
-            "seed": 42,
-            "lambda_constraint": 0.5,
-            "cagrad": False,
-            "outdir": f"outputs_digit_add_{mode}",
-        },
-    }
-    if mode == "lagrangian":
-        cfg["training"]["lagrangian_epsilon"] = 0.05
-        cfg["training"]["lagrangian_alpha"] = 0.01
+# Random Replay — same data budget, random samples
+!python main.py baseline --method random-replay \\
+    --config configs/multi_digit_random_replay.yaml --seeds {SEEDS}
 
-    cfg_path = f"configs/_colab_digit_{mode}.yaml"
-    with open(cfg_path, "w") as f:
-        yaml.dump(cfg, f)
-    print(f"\\n{'='*50}\\n  Training: {mode}\\n{'='*50}")
-    !python main.py train --config {cfg_path}
+# Hard Example Mining — highest-loss samples, not constraint violations
+!python main.py baseline --method hard-mining \\
+    --config configs/multi_digit_hard_mining.yaml --seeds {SEEDS}
+
+# Same Budget — train K×E epochs with Lagrangian only
+!python main.py baseline --method same-budget \\
+    --config configs/multi_digit_same_budget.yaml --seeds {SEEDS}
 """,
 
 # ============================================================
-# Cell 4: Multi-Digit Neural Baseline
+# Cell 5: Kinship — All Methods (3 seeds)
 # ============================================================
 """
-# Cell 4: Multi-Digit Addition — Neural Baseline
-# =================================================
-# The neural baseline should FAIL on carry-propagation (comp/hard splits).
+# Cell 5: Kinship Relational Reasoning — All Methods (3 seeds)
+# ==============================================================
+# Train depth 1-3, test depth 4-6. With distractors + balanced labels.
 
-!python main.py train-multi-digit --config configs/multi_digit_neural.yaml
+SEEDS = "42,43,44"
+
+# Pure Neural
+!python main.py multi-seed --task train-kinship \\
+    --config configs/kinship_neural.yaml --seeds {SEEDS}
+
+# NST-Lagrangian
+!python main.py multi-seed --task train-kinship \\
+    --config configs/kinship_lagrangian.yaml --seeds {SEEDS}
+
+# Neural CEGIS
+!python main.py multi-seed --task train-kinship-cegis \\
+    --config configs/kinship_cegis.yaml --seeds {SEEDS}
 """,
 
 # ============================================================
-# Cell 5: Multi-Digit Soft Constraint
+# Cell 6: CEGIS Convergence Analysis
 # ============================================================
 """
-# Cell 5: Multi-Digit Addition — Soft Constraint
-# ==================================================
+# Cell 6: CEGIS Convergence Analysis
+# ====================================
+# Print the counterexample trajectory — the signature CEGIS result.
 
-!python main.py train-multi-digit --config configs/multi_digit_soft.yaml
+import json, os, glob
+
+cegis_dirs = sorted(glob.glob("outputs_train-cegis_multiseed/seed_*/"))
+for d in cegis_dirs:
+    log_path = os.path.join(d, "cegis_log.json")
+    if not os.path.exists(log_path):
+        continue
+    with open(log_path) as f:
+        log = json.load(f)
+
+    seed = d.rstrip("/").split("_")[-1]
+    print(f"\\nSeed {seed}: Converged={log['converged']}, "
+          f"Rounds={len(log['rounds'])}")
+    for r in log["rounds"]:
+        print(f"  Round {r['round']}: CE={r['n_counterexamples']:>4d}, "
+              f"λ={r['lambda']:.4f}, CSR={r['csr']:.4f}")
 """,
 
 # ============================================================
-# Cell 6: Multi-Digit Lagrangian
+# Cell 7: Latency Benchmark
 # ============================================================
 """
-# Cell 6: Multi-Digit Addition — Lagrangian (Adaptive λ)
-# ========================================================
+# Cell 7: Inference Latency Benchmark
+# =====================================
 
-!python main.py train-multi-digit --config configs/multi_digit_lagrangian.yaml
-""",
+!mkdir -p results
+!python scripts/benchmark_latency.py --n_samples 500 --device cuda \\
+    --json results/latency_gpu.json
 
-# ============================================================
-# Cell 7: Multi-Digit CEGIS (The Core Contribution)
-# ============================================================
-"""
-# Cell 7: Multi-Digit Addition — Neural CEGIS 🎯
-# ==================================================
-# THIS IS THE MAIN EXPERIMENT. CEGIS should outperform all baselines
-# on the compositional (carry) split.
-
-!python main.py train-cegis --config configs/multi_digit_cegis.yaml
-
-# Print convergence trajectory
 import json
-with open("outputs_multi_digit_cegis/cegis_log.json") as f:
-    log = json.load(f)
+with open("results/latency_gpu.json") as f:
+    lat = json.load(f)
 
-print(f"\\nConverged: {log['converged']}")
-print(f"Rounds: {len(log['rounds'])}")
-print(f"Total counterexamples: {log['total_counterexamples']}")
-print("\\nCE trajectory:")
-for r in log["rounds"]:
-    print(f"  Round {r['round']}: CE={r['n_counterexamples']}, "
-          f"λ={r['lambda']:.4f}, CSR={r['csr']:.4f}")
+print(f"\\n{'Mode':<15} {'ms/sample':>10} {'throughput':>12}")
+print("-" * 40)
+for entry in lat:
+    print(f\"{entry['mode']:<15} {entry['per_sample_ms_mean']:>10.2f} \"
+          f\"{entry['throughput_samples_per_s']:>12.1f}\")
 """,
 
 # ============================================================
-# Cell 8: Kinship Relational Reasoning
+# Cell 8: Generate Plots + Tables
 # ============================================================
 """
-# Cell 8: Kinship with Distractors + Corruption
-# =================================================
-# Tests compositional generalisation: train depth 1-3, test depth 4-6
-# With 2 distractors + 10% label corruption + balanced labels.
+# Cell 8: Plots + Tables
+# ========================
 
-!python main.py train-kinship --config configs/kinship_cegis.yaml
+!mkdir -p figures results
+
+# Alignment phase plot (Lagrangian)
+!python scripts/plot_alignment.py \\
+    --logdir outputs_train-multi-digit_multiseed/seed_42 \\
+    --outdir figures/ 2>/dev/null || echo "Skipped (no logs)"
+
+# CEGIS convergence plot
+!python scripts/plot_alignment.py \\
+    --logdir outputs_train-cegis_multiseed/seed_42 \\
+    --cegis --outdir figures/ 2>/dev/null || echo "Skipped (no logs)"
+
+# Export tables
+!python scripts/export_tables.py --task multi_digit --format markdown \\
+    --outdir results/ 2>/dev/null || echo "Skipped (no data)"
+!python scripts/export_tables.py --task kinship --format markdown \\
+    --outdir results/ 2>/dev/null || echo "Skipped (no data)"
+
+# Display table if generated
+import os
+for f in ["results/multi_digit_results.md", "results/kinship_results.md"]:
+    if os.path.exists(f):
+        print(f"\\n{'='*60}")
+        print(f"  {f}")
+        print(f"{'='*60}")
+        print(open(f).read())
 """,
 
 # ============================================================
-# Cell 9: Results Summary + Visualisation
+# Cell 9: Full Results Summary
 # ============================================================
 """
 # Cell 9: Results Summary
@@ -175,11 +226,15 @@ print("  NEURAL CEGIS — FULL RESULTS SUMMARY")
 print("=" * 70)
 
 # Collect all reports
-report_files = glob.glob("outputs_*/report.json")
-for rf in sorted(report_files):
-    name = os.path.dirname(rf).replace("outputs_", "")
-    with open(rf) as f:
-        report = json.load(f)
+report_files = sorted(glob.glob("outputs_*/report.json")) + \\
+               sorted(glob.glob("outputs_*/seed_*/report.json"))
+for rf in report_files:
+    name = rf.replace("/report.json", "").replace("outputs_", "")
+    try:
+        with open(rf) as f:
+            report = json.load(f)
+    except Exception:
+        continue
 
     print(f"\\n{'─'*50}")
     print(f"  {name}")
@@ -188,17 +243,21 @@ for rf in sorted(report_files):
     for key in ["iid_test", "comp_test", "hard_test"]:
         if key in report:
             m = report[key]
-            print(f"  {key}: sum_acc={m.get('sum_acc', 'N/A'):.4f}, "
-                  f"CSR={m.get('csr', 'N/A'):.4f}")
+            acc = m.get("sum_acc", m.get("accuracy", "N/A"))
+            csr = m.get("csr", "N/A")
+            if isinstance(acc, float):
+                acc = f"{acc:.4f}"
+            if isinstance(csr, float):
+                csr = f"{csr:.4f}"
+            print(f"  {key}: acc={acc}, CSR={csr}")
 
     if "cegis" in report:
         c = report["cegis"]
         print(f"  CEGIS converged: {c.get('converged', 'N/A')}, "
-              f"rounds: {c.get('total_rounds', 'N/A')}, "
-              f"final_λ: {c.get('final_lambda', 'N/A'):.4f}")
+              f"rounds: {c.get('total_rounds', 'N/A')}")
 
 print(f"\\n{'='*70}")
-print("  Expected result: Neural CEGIS >> Lagrangian >> Soft >> Neural")
+print("  Expected: Neural CEGIS >> Lagrangian >> Soft >> Neural")
 print("  on comp_test and hard_test (carry generalisation)")
 print(f"{'='*70}")
 """,

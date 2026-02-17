@@ -53,10 +53,10 @@ def train_multi_digit(config_path: str, outdir_override: str | None = None) -> d
     model_cfg = cfg.get("model", {})
 
     mode = model_cfg.get("mode", "neural")
-    epochs = train_cfg.get("epochs", 30)
-    lr = train_cfg.get("lr", 1e-3)
-    batch_size = train_cfg.get("batch_size", 64)
-    seed = train_cfg.get("seed", 42)
+    epochs = int(train_cfg.get("epochs", 30))
+    lr = float(train_cfg.get("lr", 1e-3))
+    batch_size = int(train_cfg.get("batch_size", 64))
+    seed = int(train_cfg.get("seed", 42))
     device = _auto_device(train_cfg.get("device", "auto"))
     outdir = outdir_override or train_cfg.get("outdir", f"outputs_multi_digit_{mode}")
 

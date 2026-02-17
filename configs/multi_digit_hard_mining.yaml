@@ -1,0 +1,29 @@
+# Multi-digit addition — Hard Example Mining baseline
+# Selects highest-loss samples instead of constraint-violating counterexamples.
+# Run: python main.py baseline --method hard-mining --config configs/multi_digit_hard_mining.yaml
+
+model:
+  mode: lagrangian
+
+data:
+  n_train: 5000
+  n_test: 2000
+  seed: 42
+
+training:
+  epochs: 15
+  batch_size: 64
+  lr: 0.001
+  device: auto
+
+lagrangian:
+  epsilon: 0.05
+  alpha: 0.01
+  rho: 1.0
+  lam_max: 10.0
+
+baseline:
+  method: hard_mining
+  rounds: 10
+  mine_size: 500         # matches CEGIS CE buffer cap
+  oversample: 3

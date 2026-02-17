@@ -1,0 +1,29 @@
+# Multi-digit addition — Random Replay baseline
+# Matches CEGIS data budget but uses random samples instead of counterexamples.
+# Run: python main.py baseline --method random-replay --config configs/multi_digit_random_replay.yaml
+
+model:
+  mode: lagrangian
+
+data:
+  n_train: 5000
+  n_test: 2000
+  seed: 42
+
+training:
+  epochs: 15
+  batch_size: 64
+  lr: 0.001
+  device: auto
+
+lagrangian:
+  epsilon: 0.05
+  alpha: 0.01
+  rho: 1.0
+  lam_max: 10.0
+
+baseline:
+  method: random_replay
+  rounds: 10
+  replay_size: 500       # matches CEGIS CE buffer cap
+  oversample: 3

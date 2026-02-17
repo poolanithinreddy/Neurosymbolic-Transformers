@@ -1,37 +1,42 @@
+# Python
 __pycache__/
 *.pyc
-.DS_Store
+*.pyo
 .venv/
+.env/
+dist/
+build/
+*.egg-info/
+
+# Outputs & artifacts
 outputs/
-outputs_quick/
+outputs_*/
+checkpoints/
+figures/
+results/
+
+# Model weights
 *.pt
 *.bin
 *.safetensors
 *.ckpt
+
+# Data caches (generated at runtime)
+datasets/
+*.cache
+
+# Keep data/ fixture files (*.tsv) tracked — they're tiny test fixtures
+
+# Testing / linting
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .coverage
-dist/
-build/
-*.egg-info/
-# Python
-__pycache__/
-*.pyc
-.venv/
-.env/
-
-# Outputs
-outputs/
-checkpoints/
-
-# Data artifacts
-*.jsonl
-*.tsv
-*.csv
+htmlcov/
 
 # OS
 .DS_Store
 
 # Notebooks
 *.ipynb_checkpoints/
+.ipynb_checkpoints/

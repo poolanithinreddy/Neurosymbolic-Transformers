@@ -1,0 +1,27 @@
+# Multi-digit addition — Same Budget baseline
+# Trains for K×E total epochs with Lagrangian only (no replay).
+# Controls for CEGIS simply training longer.
+# Run: python main.py baseline --method same-budget --config configs/multi_digit_same_budget.yaml
+
+model:
+  mode: lagrangian
+
+data:
+  n_train: 5000
+  n_test: 2000
+  seed: 42
+
+training:
+  epochs: 150            # 10 rounds × 15 epochs = 150 total
+  batch_size: 64
+  lr: 0.001
+  device: auto
+
+lagrangian:
+  epsilon: 0.05
+  alpha: 0.01
+  rho: 1.0
+  lam_max: 10.0
+
+baseline:
+  method: same_budget

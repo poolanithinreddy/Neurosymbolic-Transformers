@@ -209,6 +209,55 @@ def cmd_ablation(args):
     print(f"\nCombined report saved to {outpath}")
 
 
+def cmd_baseline(args):
+    """Run a controlled baseline (random-replay, hard-mining, or same-budget)."""
+    from training.baselines import train_random_replay, train_hard_mining, train_same_budget
+    from training.multi_seed import parse_seeds
+
+    dispatch = {
+        "random-replay": train_random_replay,
+        "hard-mining": train_hard_mining,
+        "same-budget": train_same_budget,
+    }
+    train_fn = dispatch[args.method]
+    seeds = parse_seeds(args.seeds) if args.seeds else [42]
+    for seed in seeds:
+        outdir = args.outdir or f"outputs_{args.method.replace('-', '_')}_s{seed}"
+        report = train_fn(args.config, outdir_override=outdir, seed=seed)
+        print(f"\n[{args.method}] seed={seed}  report → {outdir}")
+
+
+def cmd_latency(args):
+    """Run inference latency benchmark."""
+    import subprocess
+    cmd = [sys.executable, "scripts/benchmark_latency.py",
+           "--n_samples", str(args.n_samples), "--device", args.device]
+    if args.json:
+        cmd += ["--json", args.json]
+    subprocess.run(cmd, check=True)
+
+
+def cmd_plot(args):
+    """Generate publication-ready plots."""
+    import subprocess
+    cmd = [sys.executable, "scripts/plot_alignment.py", "--logdir", args.logdir]
+    if args.cegis:
+        cmd.append("--cegis")
+    if args.outdir:
+        cmd += ["--outdir", args.outdir]
+    subprocess.run(cmd, check=True)
+
+
+def cmd_export_tables(args):
+    """Export multi-seed results as LaTeX/Markdown tables."""
+    import subprocess
+    cmd = [sys.executable, "scripts/export_tables.py",
+           "--task", args.task, "--format", args.format]
+    if args.outdir:
+        cmd += ["--outdir", args.outdir]
+    subprocess.run(cmd, check=True)
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="nst",
@@ -294,6 +343,35 @@ def main():
     # ablation
     p_abl = subparsers.add_parser("ablation", help="Run all ablation experiments")
 
+    # baseline
+    p_bl = subparsers.add_parser("baseline", help="Run a controlled baseline method")
+    p_bl.add_argument("--method", required=True,
+                      choices=["random-replay", "hard-mining", "same-budget"],
+                      help="Baseline method to run")
+    p_bl.add_argument("--config", required=True, help="YAML config path")
+    p_bl.add_argument("--seeds", default=None, help="Comma-separated seeds (default: 42)")
+    p_bl.add_argument("--outdir", default=None, help="Override output directory")
+
+    # latency
+    p_lat = subparsers.add_parser("latency", help="Benchmark inference latency")
+    p_lat.add_argument("--n_samples", type=int, default=500)
+    p_lat.add_argument("--device", default="cpu", choices=["cpu", "cuda", "mps"])
+    p_lat.add_argument("--json", default=None, help="Save JSON results to path")
+
+    # plot
+    p_plot = subparsers.add_parser("plot", help="Generate alignment / convergence plots")
+    p_plot.add_argument("--logdir", required=True, help="Training output directory with logs")
+    p_plot.add_argument("--cegis", action="store_true", help="Generate CEGIS convergence plot")
+    p_plot.add_argument("--outdir", default=None, help="Output directory for figures")
+
+    # export-tables
+    p_exp = subparsers.add_parser("export-tables", help="Export results as LaTeX/Markdown tables")
+    p_exp.add_argument("--task", required=True,
+                       choices=["multi_digit", "kinship"],
+                       help="Task to export tables for")
+    p_exp.add_argument("--format", choices=["latex", "markdown"], default="markdown")
+    p_exp.add_argument("--outdir", default=None, help="Output directory for tables")
+
     args = parser.parse_args()
 
     if args.command is None:
@@ -314,6 +392,10 @@ def main():
         "kinship-stats": cmd_kinship_stats,
         "results": cmd_results,
         "ablation": cmd_ablation,
+        "baseline": cmd_baseline,
+        "latency": cmd_latency,
+        "plot": cmd_plot,
+        "export-tables": cmd_export_tables,
     }
     dispatch[args.command](args)
 

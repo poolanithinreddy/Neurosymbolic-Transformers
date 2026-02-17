@@ -1,0 +1,16 @@
+split	claim	label	evidence
+train	Barack Obama was born in Hawaii.	Supported	Barack Obama was born in the U.S. state of Hawaii.
+train	The Eiffel Tower is located in Berlin.	Refuted	The Eiffel Tower is a wrought-iron lattice tower on the Champ de Mars in Paris, France.
+train	Cats are known for having feathers.	Refuted	Cats are mammals and do not have feathers.
+train	Water boils at 100 degrees Celsius at sea level.	Supported	At one atmosphere of pressure, water boils at 100 °C.
+train	The Great Wall of China can be seen from the Moon without aid.	Refuted	It is a myth that the Great Wall is visible from the Moon.
+train	The Pacific Ocean is the largest ocean on Earth.	Supported	The Pacific Ocean is the largest and deepest of Earth's oceanic divisions.
+train	Mount Everest is the tallest mountain above sea level.	Supported	Mount Everest is Earth's highest mountain above sea level.
+train	Venus is the closest planet to the Sun.	Refuted	Mercury is the closest planet to the Sun.
+train	Shakespeare wrote the play Hamlet.	Supported	Hamlet is a tragedy written by William Shakespeare.
+train	The human body has 206 bones.	Supported	An adult human skeleton usually consists of 206 bones.
+
+dev	Barack Obama was born in Kenya.	Refuted	Barack Obama was born in the U.S. state of Hawaii.
+dev	The capital of France is Paris.	Supported	Paris is the capital and most populous city of France.
+dev	Whales are fish.	Refuted	Whales are mammals, not fish.
+dev	Lightning never strikes the same place twice.	NEI	The phrase is a common myth; data show lightning can strike the same place more than once.
