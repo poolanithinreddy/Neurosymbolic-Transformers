@@ -1,0 +1,40 @@
+# FEVER Gold Evidence — Smoke Test (200 train, 100 dev, 1 epoch)
+# Quick validation that the full pipeline runs end-to-end
+# Expected runtime: <1 min on T4, <2 min on CPU
+
+mode: "neural"
+device: "auto"
+seed: 42
+
+task: "fever"
+evidence_mode: "gold"
+
+io:
+  out_dir: "outputs_fever_gold_smoke"
+
+model:
+  name: "microsoft/deberta-v3-base"
+  num_labels: 3
+  label_smoothing: 0.05
+  dropout: 0.1
+  max_length: 128
+
+data:
+  max_train: 200
+  max_dev: 100
+  dev_sample: 50
+
+train:
+  epochs: 1
+  batch_size: 8
+  grad_accum_steps: 1
+  lr: 2e-5
+  warmup_ratio: 0.1
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  fp16: true
+  eval_every_steps: 50
+  patience: 3
+
+logic:
+  lambda: 0.0

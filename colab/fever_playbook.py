@@ -1,4 +1,4 @@
-"""NST FEVER Colab Playbook — 13 cells for end-to-end FEVER training.
+"""NST FEVER Colab Playbook — 12 cells for end-to-end FEVER training.
 
 Copy-paste cells into Google Colab (T4 GPU runtime).
 Total estimated runtime: ~45 minutes on T4 (all cells).
@@ -37,14 +37,24 @@ print("✅ Setup complete")
 """,
 
 # ============================================================
-# Cell 2: FEVER Dataset Statistics
+# Cell 2: Build Wiki Cache + Dataset Stats
 # ============================================================
 """
-# Cell 2: FEVER dataset stats + split hashes
-# =============================================
+# Cell 2: Build wiki cache + dataset stats — ~5 min first time
+# ==============================================================
+import os
+
+# Build SQLite wiki cache (avoids OOM from loading all wiki_pages)
+if not os.path.exists("data/fever_wiki.db"):
+    !python main.py build-fever-wiki-cache
+    print("✅ Wiki cache built")
+else:
+    !python main.py build-fever-wiki-cache --stats_only
+    print("✅ Wiki cache already exists")
+
+# Dataset stats
 !python main.py fever-stats
 
-# Verify label mapping
 from data.fever_dataset import FEVER_LABELS, LABEL2ID, NUM_LABELS
 print(f"\\nLabels: {FEVER_LABELS}")
 print(f"LABEL2ID: {LABEL2ID}")
@@ -92,7 +102,6 @@ print("✅ Smoke test passed!")
 """
 # Cell 4: Gold Evidence — Neural baseline — ~8 min on T4
 # ========================================================
-# Setting A: oracle gold evidence → Label Accuracy
 !python main.py train-fever-nst --config configs/fever_gold_neural.yaml
 print("✅ Neural baseline (gold evidence) done")
 """,
@@ -113,7 +122,6 @@ print("✅ NST Soft (gold evidence) done")
 """
 # Cell 6: Gold Evidence — NST CEGIS — ~12 min
 # ==============================================
-# Full neuro-symbolic system: DeBERTa + Lagrangian + CEGIS
 !python main.py train-fever-nst --config configs/fever_gold_nst_cegis.yaml
 print("✅ NST CEGIS (gold evidence) done")
 """,
@@ -124,8 +132,6 @@ print("✅ NST CEGIS (gold evidence) done")
 """
 # Cell 7: Gold Evidence — NST ECCG (novel) — ~10 min
 # =====================================================
-# Evidence-Conditioned Constraint Gating: learned per-sample,
-# per-constraint reliability gates. THE core novel contribution.
 !python main.py train-fever-nst --config configs/fever_gold_nst_gated.yaml
 print("✅ NST ECCG / Gated (gold evidence) done")
 """,
@@ -136,8 +142,6 @@ print("✅ NST ECCG / Gated (gold evidence) done")
 """
 # Cell 8: No-leakage verification (6 automated checks)
 # =======================================================
-# Runs: split hashes, pipeline rejects gold, cache clean,
-# label shuffle sanity, near-dup detection, CEGIS source audit.
 !python scripts/verify_no_leakage.py
 print("\\n✅ All leakage checks passed (see above for details)")
 """,
@@ -169,7 +173,6 @@ for d in sorted(glob.glob("outputs_fever_gold_*")):
     brier = dev.get("brier", 0)
     print(f"  {name:<28} {acc:>8.4f} {ece:>8.4f} {brier:>8.4f}")
 
-    # Per-class
     per_label = dev.get("per_label", {})
     for lbl in ["SUPPORTS", "REFUTES", "NOT ENOUGH INFO"]:
         stats = per_label.get(lbl, {})
@@ -180,53 +183,15 @@ print("\\n✅ Comparison complete")
 """,
 
 # ============================================================
-# Cell 10: Integrity Checks
+# Cell 10: Multi-seed Run (3 seeds, error bars)
 # ============================================================
 """
-# Cell 10: Integrity checks — split hashes + shuffle sanity
-# ==========================================================
-import random, json
-from data.fever_dataset import load_fever_splits, _split_hash
-
-splits = load_fever_splits(max_dev=2000)
-print("Split hashes:")
-for name, items in splits.items():
-    h = _split_hash(items)
-    print(f"  {name}: {h}  (n={len(items)})")
-
-# Shuffle sanity: random labels → ~33% accuracy
-rpath = "outputs_fever_gold_neural/report.json"
-if __import__('os').path.exists(rpath):
-    with open(rpath) as f:
-        rep = json.load(f)
-    dev_acc = rep.get("dev", {}).get("accuracy", 0)
-    print(f"\\nActual accuracy:   {dev_acc:.4f}")
-
-    # Simulate shuffle
-    n = 1000
-    labels = ["SUPPORTS", "REFUTES", "NOT ENOUGH INFO"]
-    preds = [random.choice(labels) for _ in range(n)]
-    golds = [random.choice(labels) for _ in range(n)]
-    random_acc = sum(p == g for p, g in zip(preds, golds)) / n
-    print(f"Random baseline:   {random_acc:.4f}  (expected ~0.33)")
-    assert dev_acc > random_acc + 0.2, "Model not beating random!"
-    print("✅ Shuffle sanity passed — model clearly above chance")
-else:
-    print("⚠️  No neural baseline report found, skipping shuffle check")
-""",
-
-# ============================================================
-# Cell 11: Multi-seed Run (3 seeds, error bars)
-# ============================================================
-"""
-# Cell 11: Multi-seed ECCG for reproducibility — ~30 min
+# Cell 10: Multi-seed ECCG for reproducibility — ~30 min
 # ========================================================
-# Runs gated mode with seeds 42, 43, 44 for mean ± std
 !python main.py multi-seed --task train-fever-nst \\
     --config configs/fever_gold_nst_gated.yaml \\
     --seeds 42,43,44
 
-# Display aggregated results
 import json
 with open("outputs_train-fever-nst_multiseed/multi_seed_summary.json") as f:
     summary = json.load(f)
@@ -240,10 +205,10 @@ print("✅ Multi-seed evaluation complete")
 """,
 
 # ============================================================
-# Cell 12: Gate Analysis (ECCG Interpretability)
+# Cell 11: Gate Analysis (ECCG Interpretability)
 # ============================================================
 """
-# Cell 12: Analyse learned gate values — what did ECCG learn?
+# Cell 11: Analyse learned gate values — what did ECCG learn?
 # =============================================================
 import torch, json, os
 from symbolic.constraint_gating import ConstraintGate
@@ -254,7 +219,6 @@ if os.path.exists(gate_path):
     gate.load_state_dict(torch.load(gate_path, map_location='cpu'))
     gate.eval()
 
-    # Print learned biases (effective default gate openness)
     biases = gate.net[-1].bias.detach()
     constraint_names = ['C1:date_contra', 'C2:num_contra', 'C3:neg_mismatch',
                         'C4:low_overlap', 'C5:no_evidence']
@@ -262,7 +226,6 @@ if os.path.exists(gate_path):
     for name, b in zip(constraint_names, biases):
         print(f"  {name:<20} bias={b.item():.3f}  → gate={torch.sigmoid(b).item():.3f}")
 
-    # Check report for gate means during training
     rpath = "outputs_fever_gold_nst_gated/report.json"
     if os.path.exists(rpath):
         with open(rpath) as f:
@@ -275,28 +238,32 @@ print("✅ Gate analysis complete")
 """,
 
 # ============================================================
-# Cell 13: Save to Drive
+# Cell 12: Zip + Save to Drive
 # ============================================================
 """
-# Cell 13: Save checkpoints + reports to Google Drive
-# =====================================================
+# Cell 12: Zip outputs + save to Google Drive
+# ==============================================
 from google.colab import drive
 drive.mount('/content/drive', force_remount=False)
 
-import shutil, os, glob
+import shutil, datetime, os, glob
 
-DST = "/content/drive/MyDrive/nst_fever_results"
-os.makedirs(DST, exist_ok=True)
+timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
 
-# Copy all FEVER output directories
+# Collect all FEVER outputs into a single directory
+os.makedirs("outputs", exist_ok=True)
 for d in sorted(glob.glob("outputs_fever_*")):
-    dst_dir = os.path.join(DST, os.path.basename(d))
-    if os.path.exists(dst_dir):
-        shutil.rmtree(dst_dir)
-    shutil.copytree(d, dst_dir)
-    print(f"  Saved {d} → {dst_dir}")
+    dst = os.path.join("outputs", os.path.basename(d))
+    if not os.path.exists(dst):
+        shutil.copytree(d, dst)
 
-print(f"\\n✅ All results saved to {DST}")
+archive = shutil.make_archive(f"nst_results_{timestamp}", 'zip', 'outputs')
+print(f"Created: {archive}")
+
+DST = "/content/drive/MyDrive/"
+shutil.copy(archive, DST)
+print(f"Saved to Drive: {DST}{os.path.basename(archive)}")
+print(f"\\n✅ All results zipped and saved to Google Drive")
 """,
 
 ]  # end COLAB_CELLS

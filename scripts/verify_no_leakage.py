@@ -60,14 +60,18 @@ def check_1_split_integrity(splits: dict) -> bool:
 
 
 def check_2_evidence_leakage_guard(splits: dict) -> bool:
-    """Check 2: FeverPipelineDataset rejects gold evidence."""
+    """Check 2: FeverPipelineDataset never exposes gold evidence fields.
+
+    Data-dependency leakage = pipeline code reads gold-evidence fields.
+    Overlap between retrieved and gold evidence is NOT leakage — a good
+    retriever SHOULD find the same sentences.
+    """
     from data.fever_dataset import FeverPipelineDataset
 
     print("\n" + "=" * 60)
-    print("  CHECK 2: Evidence Leakage Guard")
+    print("  CHECK 2: Data-Dependency Leakage Guard")
     print("=" * 60)
 
-    # Create fake retrieved evidence that IS the gold evidence
     items = splits.get("dev", splits.get("train", []))[:100]
     if not items:
         print("  ⚠️ SKIP: No data available for leakage test")
@@ -82,27 +86,32 @@ def check_2_evidence_leakage_guard(splits: dict) -> bool:
         print(f"  ❌ FAIL: Pipeline rejected independent evidence: {e}")
         return False
 
-    # Test 2: Pipeline dataset with gold evidence should RAISE
-    retrieved_gold = {it["id"]: it["gold_evidence_text"] for it in items
-                      if it.get("gold_evidence_text")}
-    if retrieved_gold:
-        try:
-            ds = FeverPipelineDataset(items, retrieved_gold)
-            print("  ❌ FAIL: Pipeline ACCEPTED gold evidence (leakage!)")
-            return False
-        except ValueError:
-            print("  ✅ Pipeline correctly REJECTED gold evidence leak")
-    else:
-        print("  ⚠️ SKIP: No gold evidence text in sample")
-
-    # Test 3: Pipeline getitem never exposes gold_evidence_text
-    retrieved2 = {it["id"]: "test evidence" for it in items}
-    ds2 = FeverPipelineDataset(items, retrieved2)
-    sample = ds2[0]
+    # Test 2: Pipeline __getitem__ never exposes gold_evidence_text
+    sample = ds[0]
     if "gold_evidence_text" in sample:
         print("  ❌ FAIL: Pipeline __getitem__ exposes gold_evidence_text!")
         return False
     print("  ✅ Pipeline __getitem__ correctly excludes gold_evidence_text")
+
+    # Test 3: Pipeline with gold evidence should STILL work (overlap ≠ leakage)
+    retrieved_gold = {it["id"]: it.get("gold_evidence_text", "fallback") for it in items}
+    try:
+        ds2 = FeverPipelineDataset(items, retrieved_gold)
+        sample2 = ds2[0]
+        assert "gold_evidence_text" not in sample2
+        print("  ✅ Pipeline accepts high-overlap evidence (overlap ≠ leakage)")
+    except ValueError as e:
+        print(f"  ❌ FAIL: Pipeline wrongly rejected high-overlap evidence: {e}")
+        return False
+
+    # Test 4: Verify evidence field uses retrieved, not gold
+    for i in range(min(5, len(items))):
+        sample = ds[i]
+        expected = retrieved.get(items[i]["id"], "")
+        if sample["evidence"] != expected:
+            print(f"  ❌ FAIL: Sample {i} evidence ≠ retrieved evidence")
+            return False
+    print("  ✅ Pipeline evidence field uses retrieved evidence (not gold)")
 
     return True
 

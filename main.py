@@ -85,6 +85,33 @@ def cmd_fever_stats(args):
     print_fever_stats(splits)
 
 
+def cmd_build_fever_wiki_cache(args):
+    """Build SQLite wiki cache from HuggingFace FEVER wiki_pages."""
+    import logging
+    logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
+    from data.fever_wiki_cache import build_wiki_cache, cache_stats
+
+    if args.stats_only:
+        stats = cache_stats(args.cache_path)
+        if stats["exists"]:
+            print(f"  Path:        {stats['path']}")
+            print(f"  Pages:       {stats['n_pages']}")
+            print(f"  Size:        {stats['size_mb']:.2f} MB")
+            print(f"  Titles hash: {stats['titles_hash']}")
+        else:
+            print(f"  Cache not found at {args.cache_path}")
+        return
+
+    stats = build_wiki_cache(
+        cache_path=args.cache_path,
+        hf_cache_dir=args.hf_cache_dir,
+        smoke=args.smoke,
+    )
+    print(f"\n  Built: {stats['n_found']}/{stats['n_needed']} pages "
+          f"({stats['n_missing']} missing) in {stats['elapsed_s']}s")
+    print(f"  Cache: {stats['cache_path']} ({stats['cache_size_mb']:.1f} MB)")
+
+
 def cmd_eval_fever(args):
     """Evaluate a trained FEVER NLI checkpoint."""
     import torch
@@ -426,6 +453,18 @@ def main():
     p_fstats.add_argument("--max_train", type=int, default=None)
     p_fstats.add_argument("--max_dev", type=int, default=None)
 
+    # build-fever-wiki-cache
+    p_wc = subparsers.add_parser("build-fever-wiki-cache",
+                                  help="Build SQLite wiki cache from HF FEVER wiki_pages")
+    p_wc.add_argument("--cache_path", default="data/fever_wiki.db",
+                       help="Output SQLite path (default: data/fever_wiki.db)")
+    p_wc.add_argument("--hf_cache_dir", default=None,
+                       help="HuggingFace dataset cache directory")
+    p_wc.add_argument("--smoke", action="store_true",
+                       help="Smoke mode: limit to 2000 train + 500 dev titles")
+    p_wc.add_argument("--stats_only", action="store_true",
+                       help="Print cache stats without building")
+
     # eval-fever
     p_efever = subparsers.add_parser("eval-fever", help="Evaluate FEVER NLI checkpoint")
     p_efever.add_argument("--ckpt", required=True, help="Best model checkpoint path")
@@ -535,6 +574,7 @@ def main():
         "train-fever": cmd_train_fever,
         "train-fever-nst": cmd_train_fever_nst,
         "fever-stats": cmd_fever_stats,
+        "build-fever-wiki-cache": cmd_build_fever_wiki_cache,
         "eval-fever": cmd_eval_fever,
         "export-fever-tables": cmd_export_fever_tables,
         "train-kinship": cmd_train_kinship,

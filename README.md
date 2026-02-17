@@ -94,6 +94,7 @@ make all-paper        # all of the above
 | `kinship-stats` | Kinship dataset statistics |
 | `train-fever` | Train FEVER (original pipeline) |
 | `train-fever-nst` | Train FEVER NLI with DeBERTa + NST constraints |
+| `build-fever-wiki-cache` | Build SQLite wiki cache (avoids OOM) |
 | `fever-stats` | Print FEVER dataset statistics + split hashes |
 | `eval-fever` | Evaluate FEVER NLI checkpoint |
 | `export-fever-tables` | Export FEVER results as Markdown tables |
@@ -115,6 +116,8 @@ make all-paper        # all of the above
 | `fever_gold_neural.yaml` | Pure neural baseline | FEVER (Gold Evidence) |
 | `fever_gold_nst_soft.yaml` | Soft constraints (fixed λ) | FEVER (Gold Evidence) |
 | `fever_gold_nst_cegis.yaml` | **Neural CEGIS** | FEVER (Gold Evidence) |
+| `fever_gold_nst_gated.yaml` | **ECCG** (novel) | FEVER (Gold Evidence) |
+| `fever_gold_smoke.yaml` | Smoke test (200 samples) | FEVER (Gold Evidence) |
 | `fever_pipeline_neural.yaml` | Pure neural baseline | FEVER (Full Pipeline) |
 | `fever_pipeline_nst_cegis.yaml` | **Neural CEGIS** | FEVER (Full Pipeline) |
 
@@ -122,13 +125,14 @@ make all-paper        # all of the above
 
 See `colab/nst_playbook.py` for copy-paste cells. Runs the full experiment suite in ~40 minutes on a T4 GPU.
 
-For FEVER specifically, see `colab/fever_playbook.py` (10 cells, ~30 min on T4).
+For FEVER specifically, see `colab/fever_playbook.py` (12 cells, ~45 min on T4).
 
 ```bash
 !git clone https://github.com/poolanithinreddy/Neurosymbolic-Transformers.git nst
 %cd nst
 !pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 -q
 !pip install -e ".[dev]" -q
+!python main.py build-fever-wiki-cache   # one-time, avoids OOM
 !python main.py train-cegis --config configs/multi_digit_cegis.yaml
 ```
 
@@ -142,6 +146,9 @@ NST includes a full FEVER fact verification pipeline with two evaluation setting
 **Architecture**: DeBERTa-v3-base for 3-class NLI + 5 differentiable constraints (date contradiction → ¬SUPPORTS, number contradiction → ¬SUPPORTS, negation mismatch → ¬SUPPORTS, low entity overlap → NEI, empty evidence → NEI).
 
 ```bash
+# Build wiki cache (one-time, avoids OOM on Colab)
+python main.py build-fever-wiki-cache
+
 # Dataset stats + split hashes
 python main.py fever-stats
 

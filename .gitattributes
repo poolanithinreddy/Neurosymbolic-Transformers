@@ -1,1 +1,20 @@
-* text=auto eol=lf
+# Auto-detect text files and ensure LF line endings.
+# Fixes GitHub rendering YAML / Python as 1 long line.
+
+* text=auto
+
+*.py   text eol=lf
+*.yaml text eol=lf
+*.yml  text eol=lf
+*.md   text eol=lf
+*.txt  text eol=lf
+*.sh   text eol=lf
+*.toml text eol=lf
+*.json text eol=lf
+*.tsv  text eol=lf
+
+# Binary files — do not touch
+*.png  binary
+*.jpg  binary
+*.pt   binary
+*.db   binary
