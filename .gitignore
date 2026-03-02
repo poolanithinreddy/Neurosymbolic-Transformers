@@ -1,42 +1,80 @@
-# Python
+# ──────────────────────────────────────────────
+#  .gitignore — Neurosymbolic Transformers (NST)
+# ──────────────────────────────────────────────
+
+# ── Python ───────────────────────────────────
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
 .venv/
 .env/
+env/
 dist/
 build/
 *.egg-info/
 
-# Outputs & artifacts
+# ── Outputs & training artifacts ─────────────
 outputs/
 outputs_*/
 checkpoints/
-figures/
-results/
+runs/
+wandb/
 
-# Model weights
+# ── Model weights (never commit) ────────────
 *.pt
 *.bin
 *.safetensors
 *.ckpt
+*.h5
 
-# Data caches (generated at runtime)
+# ── Data artifacts & caches ──────────────────
+# SQLite caches generated at runtime
+*.db
+*.sqlite
+*.sqlite3
+# HuggingFace datasets cache
 datasets/
 *.cache
+# Wiki dumps, large JSONL, ZIPs
+data/wiki*
+data/*wiki*
+data/*.jsonl
+data/*.jsonl.gz
+data/*.zip
+data/*.tar.gz
+data/fever_wiki_manifest.json
+# Large downloaded corpora
+data/fever/
 
-# Keep data/ fixture files (*.tsv) tracked — they're tiny test fixtures
+# ── Keep these small data files tracked ──────
+!data/README.md
+!data/*.tsv
+!data/*.py
+!data/*.yaml
 
-# Testing / linting
+# ── Testing / linting ───────────────────────
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .coverage
 htmlcov/
 
-# OS
+# ── OS artifacts ─────────────────────────────
 .DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
 
-# Notebooks
+# ── Notebooks ────────────────────────────────
 *.ipynb_checkpoints/
 .ipynb_checkpoints/
+
+# ── Figures (regenerated) ────────────────────
+figures/
+
+# ── IDE ──────────────────────────────────────
+.idea/
+.vscode/
+*.code-workspace

@@ -27,7 +27,12 @@ from typing import Any
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, AutoConfig
+from transformers import (
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+    AutoConfig,
+    DebertaV2Tokenizer,
+)
 
 from data.fever_dataset import NUM_LABELS, LABEL2ID, ID2LABEL
 
@@ -53,7 +58,12 @@ def build_fever_model(
     """
     logger.info(f"Loading model: {model_name}")
 
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    # DeBERTa-v3 has tiktoken/protobuf issues with fast tokenizer in
+    # transformers 4.46.x — use the explicit slow tokenizer class.
+    if "deberta-v3" in model_name.lower():
+        tokenizer = DebertaV2Tokenizer.from_pretrained(model_name)
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     config = AutoConfig.from_pretrained(
         model_name,

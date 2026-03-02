@@ -195,11 +195,18 @@ def load_fever_splits(
     cache_dir: str | None = None,
     max_train: int | None = None,
     max_dev: int | None = None,
+    dev_test_ratio: float = 0.0,
+    seed: int = 42,
 ) -> dict[str, list[dict]]:
     """Load FEVER from HuggingFace datasets with train/dev splits.
 
     Returns dict with 'train' and 'dev' keys, each containing list of dicts:
       {id, claim, label, label_id, gold_evidence_text}
+
+    If ``dev_test_ratio > 0``, the labelled_dev split is further divided
+    into 'dev' (for tuning / early stopping) and 'dev_test' (held-out,
+    touched only once for final numbers).  This prevents overfitting
+    to the dev set through repeated evaluation.
 
     Evidence text is resolved by joining with the wiki_pages split of the
     HF dataset.  When wiki_pages are unavailable, falls back to page titles.
@@ -358,6 +365,20 @@ def load_fever_splits(
             f"{len(split_items) - n_with_text} without)"
         )
 
+    # ── Optional dev / dev-test split ─────────────────────────
+    if dev_test_ratio > 0.0 and "dev" in result and result["dev"]:
+        import random as _rng
+        rng = _rng.Random(seed)
+        dev_items = list(result["dev"])
+        rng.shuffle(dev_items)
+        split_idx = int(len(dev_items) * (1 - dev_test_ratio))
+        result["dev"] = dev_items[:split_idx]
+        result["dev_test"] = dev_items[split_idx:]
+        logger.info(
+            f"  Split labelled_dev into dev ({len(result['dev'])}) "
+            f"+ dev_test ({len(result['dev_test'])})"
+        )
+
     # Log split hashes for reproducibility
     for split_name, items in result.items():
         h = _split_hash(items)
@@ -489,16 +510,25 @@ def fever_collate_fn(
 ) -> dict:
     """Tokenize and collate a batch of FEVER examples.
 
-    Input format: "claim [SEP] evidence"
-    Output: input_ids, attention_mask, labels
+    Uses the tokenizer's native sentence-pair encoding so that special
+    tokens (``[CLS]``, ``[SEP]`` / ``</s>``, token-type IDs) are
+    inserted correctly for each backbone (BERT, DeBERTa, RoBERTa, …).
+
+    Previous version concatenated ``claim [SEP] evidence`` as a flat
+    string, which inserted literal ``[SEP]`` text into DeBERTa's
+    SentencePiece vocabulary — a significant tokenisation error.
+
+    Output: input_ids, attention_mask, labels (+ raw claim/evidence for
+    downstream constraint extraction).
     """
-    texts = [
-        f"{ex['claim']} [SEP] {ex['evidence']}" for ex in batch
-    ]
+    claims = [ex["claim"] for ex in batch]
+    evidences = [ex["evidence"] for ex in batch]
     labels = torch.tensor([ex["label_id"] for ex in batch], dtype=torch.long)
 
+    # Native sentence-pair encoding: tokenizer(text, text_pair)
     encoding = tokenizer(
-        texts,
+        claims,
+        evidences,
         padding=True,
         truncation=True,
         max_length=max_length,
@@ -509,8 +539,8 @@ def fever_collate_fn(
         "input_ids": encoding["input_ids"],
         "attention_mask": encoding["attention_mask"],
         "labels": labels,
-        "claims": [ex["claim"] for ex in batch],
-        "evidences": [ex["evidence"] for ex in batch],
+        "claims": claims,
+        "evidences": evidences,
     }
 
 

@@ -1,8 +1,8 @@
-# FEVER Gold Evidence — NST Soft Constraints (Setting A)
-# DeBERTa-v3-base + fixed-weight symbolic constraints
-# Expected: marginal gain over neural baseline via constraint regularization
+# FEVER Gold Evidence — NST Lagrangian (Setting A)
+# DeBERTa-v3-base + adaptive Lagrangian constraint weighting
+# Expected: improved accuracy over fixed-weight soft via adaptive λ
 
-mode: "soft"
+mode: "lagrangian"
 device: "auto"
 seed: 42
 
@@ -10,7 +10,7 @@ task: "fever"
 evidence_mode: "gold"
 
 io:
-  out_dir: "outputs_fever_gold_nst_soft"
+  out_dir: "outputs_fever_gold_lagrangian"
 
 model:
   name: "microsoft/deberta-v3-base"
@@ -22,8 +22,7 @@ model:
 data:
   max_train: null
   max_dev: null
-  dev_sample: 2000
-  dev_test_ratio: 0.1
+  dev_test_ratio: 0.1         # Hold out 10% of labelled_dev for final eval
 
 train:
   epochs: 3
@@ -39,10 +38,19 @@ train:
   patience: 5
 
 logic:
-  lambda: 0.1                 # fixed constraint weight
+  lambda: 0.05
+  lambda_lr: 0.01
+  lambda_max: 2.0
+  epsilon: 0.05
   constraint_weights:
     date_contradiction: 1.0
     number_contradiction: 1.0
     negation_mismatch: 0.8
     low_entity_overlap: 0.5
     empty_evidence: 0.3
+
+lagrangian:
+  epsilon: 0.05
+  alpha: 0.01
+  rho: 1.0
+  lam_max: 2.0

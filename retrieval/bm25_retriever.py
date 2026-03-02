@@ -19,12 +19,34 @@ from typing import Any
 
 logger = logging.getLogger("bm25_retriever")
 
+# ── Stopwords (common English) ────────────────────────────
+_STOPWORDS = frozenset({
+    "a", "an", "the", "is", "was", "were", "are", "am", "be", "been",
+    "being", "have", "has", "had", "do", "does", "did", "will", "would",
+    "shall", "should", "may", "might", "must", "can", "could", "of",
+    "in", "to", "for", "with", "on", "at", "from", "by", "about", "as",
+    "into", "through", "during", "before", "after", "above", "below",
+    "between", "out", "off", "over", "under", "again", "further", "then",
+    "once", "here", "there", "when", "where", "why", "how", "all",
+    "each", "every", "both", "few", "more", "most", "other", "some",
+    "such", "no", "nor", "not", "only", "own", "same", "so", "than",
+    "too", "very", "just", "because", "if", "or", "and", "but", "it",
+    "its", "this", "that", "these", "those", "i", "me", "my", "we",
+    "our", "you", "your", "he", "him", "his", "she", "her", "they",
+    "them", "their", "what", "which", "who", "whom",
+})
+
 
 def _tokenize(text: str) -> list[str]:
-    """Simple whitespace + punctuation tokenizer for BM25."""
+    """Tokenize text for BM25: lowercase, strip punctuation, remove stopwords.
+
+    Uses a lightweight approach that works well for BM25 matching without
+    requiring external NLP libraries (spacy/nltk).
+    """
     text = text.lower()
     text = re.sub(r"[^a-z0-9\s]", " ", text)
-    return text.split()
+    tokens = text.split()
+    return [t for t in tokens if t not in _STOPWORDS and len(t) > 1]
 
 
 class BM25Retriever:

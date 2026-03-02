@@ -118,6 +118,96 @@ def retrieval_recall_at_k(
     return results
 
 
+def fever_score(
+    pred_labels: list[str],
+    gold_labels: list[str],
+    predicted_evidence: list[list[tuple[str, int]]],
+    gold_evidence: list[list[list[tuple[str, int]]]],
+) -> dict[str, Any]:
+    """Compute the official FEVER shared-task score.
+
+    A prediction is counted as correct iff:
+      1. The predicted label matches the gold label, AND
+      2. For SUPPORTS/REFUTES: at least one complete evidence set
+         is a subset of the predicted evidence (document-level OR
+         sentence-level depending on the granularity provided).
+      3. For NOT ENOUGH INFO: no evidence check required.
+
+    This is the *primary* end-to-end FEVER metric and MUST be reported
+    for any pipeline (Setting B) evaluation.
+
+    Args:
+        pred_labels: list of predicted labels.
+        gold_labels: list of gold labels.
+        predicted_evidence: per-sample list of (title, sent_idx) tuples.
+        gold_evidence: per-sample list of evidence sets, where each set
+            is a list of (title, sent_idx) tuples.
+
+    Returns:
+        Dict with fever_score, strict_score, label_accuracy, n.
+    """
+    assert len(pred_labels) == len(gold_labels) == len(predicted_evidence) == len(gold_evidence), (
+        f"Length mismatch: pred={len(pred_labels)}, gold={len(gold_labels)}, "
+        f"pred_ev={len(predicted_evidence)}, gold_ev={len(gold_evidence)}"
+    )
+
+    n = len(gold_labels)
+    label_correct = 0
+    strict_correct = 0  # label + evidence
+    sufficient_evidence = 0
+
+    for i in range(n):
+        pred_l = pred_labels[i]
+        gold_l = gold_labels[i]
+
+        # Label match
+        if pred_l != gold_l:
+            continue
+        label_correct += 1
+
+        # For NEI: no evidence required → automatically counts
+        if gold_l == "NOT ENOUGH INFO":
+            strict_correct += 1
+            sufficient_evidence += 1
+            continue
+
+        # For SUPPORTS/REFUTES: check that at least one gold evidence set
+        # is fully covered by the predicted evidence
+        pred_ev_set = set()
+        for title, sent_idx in predicted_evidence[i]:
+            pred_ev_set.add((title.lower().strip(), int(sent_idx)))
+
+        ev_sufficient = False
+        for evidence_set in gold_evidence[i]:
+            if not evidence_set:
+                continue
+            # All annotations in this set must be in predicted evidence
+            all_found = True
+            for title, sent_idx in evidence_set:
+                if (title.lower().strip(), int(sent_idx)) not in pred_ev_set:
+                    all_found = False
+                    break
+            if all_found:
+                ev_sufficient = True
+                break
+
+        if ev_sufficient:
+            strict_correct += 1
+            sufficient_evidence += 1
+
+    label_acc = label_correct / max(1, n)
+    f_score = strict_correct / max(1, n)
+
+    return {
+        "fever_score": round(f_score, 4),
+        "label_accuracy": round(label_acc, 4),
+        "label_correct": label_correct,
+        "strict_correct": strict_correct,
+        "sufficient_evidence": sufficient_evidence,
+        "n": n,
+    }
+
+
 def error_decomposition(
     pred_labels: list[str],
     gold_labels: list[str],

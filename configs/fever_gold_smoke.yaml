@@ -33,7 +33,8 @@ train:
   weight_decay: 0.01
   max_grad_norm: 1.0
   fp16: true
-  eval_every_steps: 50
+  eval_every: 1
+  eval_strategy: "epoch"
   patience: 3
 
 logic:
