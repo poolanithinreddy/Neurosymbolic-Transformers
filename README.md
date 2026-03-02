@@ -40,10 +40,32 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -U pip && pip install -e ".[dev]"
 ```
 
+### macOS / Apple Silicon Notes
+
+MPS (Metal Performance Shaders) is supported via `device: "auto"` in configs.
+
+```bash
+# If you hit MPS out-of-memory during training:
+PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0 python main.py train-fever-nst \
+    --config configs/fever_mac_neural.yaml
+```
+
+**Troubleshooting:**
+
+| Issue | Fix |
+|-------|-----|
+| MPS OOM | Set `PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0`, reduce `batch_size` to 2, reduce `max_length` to 128 |
+| `fp16` not supported on MPS | Set `fp16: false` in config (MPS autocast only supports bfloat16/float16 partially) |
+| DeBERTa-v3 tokenizer crash | Ensure `sentencepiece>=0.1.99` and `protobuf>=4.0` are installed (see `requirements.txt`) |
+| Slow tokenizer warnings | Benign "overflowing tokens" messages from `DebertaV2Tokenizer`; safe to ignore |
+| `tiktoken` import error | Run `pip install tiktoken` (needed by some transformers tokenizer backends) |
+
+**Pinned dependencies** (macOS-tested): see [requirements.txt](requirements.txt) for exact versions.
+
 ## Quick Start
 
 ```bash
-# Verify everything works (119 tests)
+# Verify everything works (193 tests)
 python -m pytest tests/ -v
 
 # Dataset statistics
@@ -170,11 +192,50 @@ python main.py eval-fever --ckpt outputs_fever_gold_neural/ckpt/best_model.pt
 
 | Item | Detail |
 |------|--------|
-| Hardware | Colab T4 (16 GB VRAM) |
+| Hardware | Colab T4 (16 GB VRAM) or macOS with MPS |
 | Seeds | {42, 43, 44} — mean ± std over 3 seeds |
 | Framework | PyTorch 2.9.0, Python ≥ 3.10 |
-| Tests | 119 tests, `pytest tests/ -v` |
+| Tests | 193 tests, `pytest tests/ -v` |
 | License | MIT |
+
+## Data & Storage
+
+### Where data lives
+
+| Artifact | Path | Size | Committed? |
+|----------|------|------|------------|
+| Fixture TSVs (toy data) | `data/*.tsv` | ~16 KB | **Yes** — tiny test fixtures |
+| Dataset loaders (source) | `data/*.py` | ~80 KB | **Yes** — source code |
+| FEVER wiki cache (SQLite) | `data/fever_wiki.db` | ~25 MB | **No** — generated at runtime |
+| Training outputs | `outputs_*/` | Varies | **No** — gitignored |
+| HuggingFace cache | `~/.cache/huggingface/` | 1–20 GB | **No** — system-wide cache |
+
+### Building caches (do NOT commit them)
+
+```bash
+# Build full FEVER wiki cache (~200s, ~25 MB SQLite)
+python main.py build-fever-wiki-cache
+
+# Check dataset stats + split hashes
+python main.py fever-stats
+```
+
+### Cleaning up downloaded artifacts
+
+```bash
+# Remove repo-local outputs and caches
+bash scripts/cleanup_local_data.sh
+
+# Also clear HuggingFace system cache (~1–20 GB)
+bash scripts/cleanup_local_data.sh --hf
+
+# Preview what would be deleted (dry run)
+bash scripts/cleanup_local_data.sh --dry
+```
+
+> **⚠️ Warning:** Do not commit datasets, caches, or model checkpoints to git.
+> The `.gitignore` blocks `*.db`, `*.safetensors`, `*.pt`, `*.bin`, and `outputs_*/`.
+> If you accidentally stage a large file, run: `git rm --cached <file>`
 
 ## Project Structure
 
@@ -182,15 +243,17 @@ python main.py eval-fever --ckpt outputs_fever_gold_neural/ckpt/best_model.pt
 nst/
 ├── main.py                 # 18-command CLI
 ├── PAPER.md                # Submission draft
+├── RUNBOOK.md              # Full FEVER experiment playbook
+├── RESULTS.md              # Experiment results tracker
 ├── run_all.sh              # Full experiment script
-├── configs/                # 21 YAML experiment configs
+├── configs/                # 25 YAML experiment configs
 ├── models/                 # CNN perception, Transformer, neuro-symbolic models
 ├── training/               # Training loops, CEGIS, baselines, multi-seed
 ├── symbolic/               # Lagrangian, constraint solver, rule engine
-├── data/                   # Datasets (digit addition, kinship, CLUTRR)
-├── eval/                   # Evaluation, calibration, rule checking
-├── scripts/                # Latency benchmark, plots, table export
+├── data/                   # Datasets (digit addition, kinship, CLUTRR, FEVER)
+├── eval/                   # Evaluation, calibration, FEVER Score, rule checking
+├── scripts/                # Latency benchmark, plots, table export, cleanup
 ├── results/                # Table generation (LaTeX/Markdown)
-├── tests/                  # 119 unit tests
+├── tests/                  # 193 unit tests
 └── colab/                  # One-click Colab playbook
 ```

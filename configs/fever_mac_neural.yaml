@@ -1,0 +1,57 @@
+# ──────────────────────────────────────────────────────────
+#  FEVER Gold Evidence — Neural Baseline (Mac / MPS)
+# ──────────────────────────────────────────────────────────
+#
+#  Purpose : Quick pipeline validation on Apple Silicon (MPS).
+#            Uses a 5K-sample train subset; NOT for paper claims.
+#
+#  Device  : Automatically selects MPS if available, else CPU.
+#            Override with `device: "mps"` or `device: "cpu"`.
+#
+#  Memory  : DeBERTa-v3-base needs ~8-10 GB on MPS with bs=4.
+#            If you hit MPS OOM, run with:
+#              PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0 python main.py ...
+#            Or reduce batch_size to 2 and max_length to 128.
+#
+#  Time    : ~15-20 min on M1/M2 MacBook Air.
+# ──────────────────────────────────────────────────────────
+
+mode: "neural"
+device: "auto"                   # auto → MPS (Apple Silicon) or CPU
+seed: 42
+
+task: "fever"
+evidence_mode: "gold"
+
+io:
+  out_dir: "outputs_fever_mac_neural"
+
+model:
+  name: "microsoft/deberta-v3-base"
+  num_labels: 3
+  label_smoothing: 0.05
+  dropout: 0.1
+  max_length: 192                # Reduced from 256 to fit MPS memory
+
+data:
+  max_train: 5000                # Subset for quick validation
+  max_dev: 2000
+  dev_sample: 500
+  dev_test_ratio: 0.1
+
+train:
+  epochs: 3
+  batch_size: 4                  # Small batch for MPS memory limits
+  grad_accum_steps: 4            # Effective batch = 16
+  lr: 2.0e-5
+  warmup_ratio: 0.06
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  fp16: false                    # MPS does not support fp16 autocast well
+  eval_every_steps: 100
+  eval_strategy: "steps"
+  patience: 5
+
+logic:
+  lambda: 0.0
+  constraint_weights: null
