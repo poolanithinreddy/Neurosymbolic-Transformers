@@ -1,19 +1,23 @@
-torch
- torchvision
- torchaudio
- transformers
- datasets
- peft
- accelerate
- pyyaml
- networkx
- numpy
- scipy
- scikit-learn
- pandas
- spacy
- evaluate
- matplotlib
- tqdm
- regex
- pytest
+# Pinned for reproducibility — keep in sync with pyproject.toml
+torch==2.9.0
+torchvision
+torchaudio
+transformers==4.46.3
+tokenizers>=0.20.1,<0.21
+datasets==2.21.0
+peft>=0.7.0
+accelerate>=0.25.0
+pyyaml>=6.0
+networkx>=3.0
+numpy>=1.24
+scipy>=1.10
+scikit-learn>=1.2
+pandas>=2.0
+spacy>=3.5
+evaluate>=0.4
+matplotlib>=3.7
+tqdm>=4.64
+regex>=2023.0
+rank-bm25==0.2.2
+pytest>=7.0
+pytest-cov>=4.0

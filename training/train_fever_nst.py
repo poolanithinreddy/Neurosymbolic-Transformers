@@ -28,6 +28,7 @@ import time
 from functools import partial
 from typing import Any
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, ConcatDataset
@@ -76,9 +77,15 @@ def _build_dataloader(
     shuffle: bool = True,
     num_workers: int = 0,
     pin_memory: bool = False,
+    seed: int = 42,
 ) -> DataLoader:
-    """Build DataLoader with tokenizing collate function."""
+    """Build DataLoader with tokenizing collate function.
+
+    Uses a seeded ``torch.Generator`` for reproducible shuffle order.
+    """
     collate = partial(fever_collate_fn, tokenizer=tokenizer, max_length=max_length)
+    generator = torch.Generator()
+    generator.manual_seed(seed)
     return DataLoader(
         dataset,
         batch_size=batch_size,
@@ -87,6 +94,7 @@ def _build_dataloader(
         num_workers=num_workers,
         pin_memory=pin_memory,
         drop_last=False,
+        generator=generator if shuffle else None,
     )
 
 
@@ -211,10 +219,16 @@ def train_fever_nst(
     cfg = load_and_validate_config(config_path)
     mode = cfg.get("mode", "neural")
     seed = int(cfg.get("seed", 42))
+
+    # ── Full reproducibility ─────────────────────────────────
     random.seed(seed)
+    np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+    # Deterministic algorithms — slight perf hit but reproducible
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
     device = _auto_device(cfg.get("device", "auto"))
 
@@ -233,6 +247,10 @@ def train_fever_nst(
     max_grad_norm = float(train_cfg.get("max_grad_norm", train_cfg.get("grad_clip", 1.0)))
     grad_accum_steps = int(train_cfg.get("grad_accum_steps", 1))
     eval_every = int(train_cfg.get("eval_every", train_cfg.get("eval_every_steps", 1)))
+    eval_strategy = train_cfg.get("eval_strategy", "epoch")  # "epoch" or "steps"
+    # If key is explicitly 'eval_every_steps', treat as step-level
+    if "eval_every_steps" in train_cfg and "eval_strategy" not in train_cfg:
+        eval_strategy = "steps"
     patience = int(train_cfg.get("patience", 5))
     num_workers = int(train_cfg.get("num_workers", 0))
     fp16 = train_cfg.get("fp16", device == "cuda")
@@ -250,6 +268,7 @@ def train_fever_nst(
     max_dev = data_cfg.get("max_dev", None)
     evidence_mode = data_cfg.get("evidence_mode", cfg.get("evidence_mode", "gold"))
     cache_dir = data_cfg.get("cache_dir", None)
+    dev_test_ratio = float(data_cfg.get("dev_test_ratio", 0.0))
 
     # Constraint config — support both 'logic' and 'constraints' sections
     logic_cfg = cfg.get("logic", cfg.get("constraints", {}))
@@ -279,7 +298,10 @@ def train_fever_nst(
 
     # ── Load data ────────────────────────────────────────────
     logger.info("Loading FEVER dataset...")
-    splits = load_fever_splits(cache_dir=cache_dir, max_train=max_train, max_dev=max_dev)
+    splits = load_fever_splits(
+        cache_dir=cache_dir, max_train=max_train, max_dev=max_dev,
+        dev_test_ratio=dev_test_ratio, seed=seed,
+    )
     print_fever_stats(splits)
 
     if evidence_mode == "gold":
@@ -344,10 +366,12 @@ def train_fever_nst(
     train_loader = _build_dataloader(
         train_ds, tokenizer, batch_size, max_length,
         shuffle=True, num_workers=num_workers, pin_memory=pin_memory,
+        seed=seed,
     )
     dev_loader = _build_dataloader(
         dev_ds, tokenizer, batch_size, max_length,
         shuffle=False, num_workers=num_workers, pin_memory=pin_memory,
+        seed=seed,
     )
 
     # ── Optimizer + Scheduler ────────────────────────────────
@@ -403,6 +427,7 @@ def train_fever_nst(
     train_log = []
     nan_abort = False
     ce_buffer_ds = None  # For CEGIS
+    global_step = 0  # Tracks optimizer steps across epochs/rounds
 
     n_rounds = max_rounds if mode == "cegis" else 1
     cegis_log = [] if mode == "cegis" else None
@@ -459,6 +484,7 @@ def train_fever_nst(
             train_loader = _build_dataloader(
                 combined_ds, tokenizer, batch_size, max_length,
                 shuffle=True, num_workers=num_workers, pin_memory=pin_memory,
+                seed=seed + cegis_round,
             )
 
             if cegis_log is not None:
@@ -556,6 +582,50 @@ def train_fever_nst(
                         optimizer.step()
                     scheduler.step()
                     optimizer.zero_grad()
+                    global_step += 1
+
+                    # Step-level evaluation
+                    if (eval_strategy == "steps"
+                            and eval_every > 0
+                            and global_step % eval_every == 0):
+                        dev_metrics = _eval_split(model, dev_loader, device)
+                        dev_acc = dev_metrics["accuracy"]
+                        lam_str = f" λ={lag_state.lam:.4f}" if mode != "neural" else ""
+                        print(
+                            f"  {round_label}Step {global_step}: "
+                            f"loss={loss.item()*grad_accum_steps:.4f}"
+                            f"{lam_str} | dev_acc={dev_acc:.4f} "
+                            f"ECE={dev_metrics['ece']:.4f}"
+                        )
+                        train_log.append({
+                            "global_step": global_step,
+                            "epoch": epoch + 1,
+                            "cegis_round": cegis_round if mode == "cegis" else None,
+                            "train_loss": round(loss.item() * grad_accum_steps, 4),
+                            "constraint_loss": round(loss_constraint.item(), 4),
+                            "lambda": round(lag_state.lam, 4),
+                            "dev_accuracy": dev_acc,
+                            "dev_ece": dev_metrics["ece"],
+                            "dev_brier": dev_metrics["brier"],
+                        })
+                        if dev_acc > best_dev_acc:
+                            best_dev_acc = dev_acc
+                            patience_counter = 0
+                            ckpt_dir = os.path.join(outdir, "ckpt")
+                            os.makedirs(ckpt_dir, exist_ok=True)
+                            model.model.save_pretrained(ckpt_dir)
+                            tokenizer.save_pretrained(ckpt_dir)
+                            torch.save(
+                                {"global_step": global_step, "best_dev_acc": best_dev_acc, "mode": mode},
+                                os.path.join(ckpt_dir, "training_state.pt"),
+                            )
+                        else:
+                            patience_counter += 1
+                            if patience_counter >= patience:
+                                logger.info(f"Early stopping at step {global_step}")
+                                nan_abort = True  # reuse flag to break outer loops
+                                break
+                        model.train()
 
                 epoch_loss += loss.item() * grad_accum_steps
                 epoch_constraint_loss += loss_constraint.item()
@@ -575,9 +645,16 @@ def train_fever_nst(
                     loss_task=avg_loss,
                 )
 
-            # Evaluation
+            # Evaluation (epoch-level)
             round_label = f"R{cegis_round}/" if mode == "cegis" else ""
-            if (epoch + 1) % eval_every == 0 or epoch == epochs - 1:
+            do_epoch_eval = (
+                eval_strategy == "epoch"
+                and ((epoch + 1) % eval_every == 0 or epoch == epochs - 1)
+            )
+            # Also eval at end of epoch for step-strategy (last epoch only)
+            if eval_strategy == "steps" and epoch == epochs - 1:
+                do_epoch_eval = True
+            if do_epoch_eval:
                 dev_metrics = _eval_split(model, dev_loader, device)
                 dev_acc = dev_metrics["accuracy"]
 
@@ -643,6 +720,28 @@ def train_fever_nst(
     for label, stats in final_dev.get("per_label", {}).items():
         print(f"    {label}: acc={stats['accuracy']:.4f} (n={stats['count']})")
 
+    # ── Held-out dev_test evaluation (if split exists) ───────
+    final_dev_test = None
+    if "dev_test" in splits and splits["dev_test"]:
+        print(f"\n{'─'*40}")
+        print("  Final evaluation on held-out dev_test")
+        print(f"{'─'*40}")
+        if evidence_mode == "gold":
+            dev_test_ds = FeverGoldDataset(splits["dev_test"])
+        else:
+            dev_test_ds = FeverPipelineDataset(splits["dev_test"], dev_evidence)
+        dev_test_loader = _build_dataloader(
+            dev_test_ds, tokenizer, batch_size, max_length,
+            shuffle=False, num_workers=num_workers, pin_memory=pin_memory,
+            seed=seed,
+        )
+        final_dev_test = _eval_split(model, dev_test_loader, device)
+        print(f"  Label Accuracy ({evidence_mode.upper()} evidence): {final_dev_test['accuracy']:.4f}")
+        print(f"  ECE: {final_dev_test['ece']:.4f}")
+        print(f"  Brier: {final_dev_test['brier']:.4f}")
+        for label, stats in final_dev_test.get("per_label", {}).items():
+            print(f"    {label}: acc={stats['accuracy']:.4f} (n={stats['count']})")
+
     # ── Build report ─────────────────────────────────────────
     report = {
         "mode": mode,
@@ -654,6 +753,7 @@ def train_fever_nst(
         "best_dev_acc": round(best_dev_acc, 4),
         "nan_abort": nan_abort,
         "dev": final_dev,
+        "dev_test": final_dev_test,
         "train_log": train_log,
         "final_lambda": round(lag_state.lam, 6),
         "temperature": round(optimal_T, 4),
