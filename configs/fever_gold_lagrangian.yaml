@@ -1,0 +1,56 @@
+# FEVER Gold Evidence — NST Lagrangian (Setting A)
+# DeBERTa-v3-base + adaptive Lagrangian constraint weighting
+# Expected: improved accuracy over fixed-weight soft via adaptive λ
+
+mode: "lagrangian"
+device: "auto"
+seed: 42
+
+task: "fever"
+evidence_mode: "gold"
+
+io:
+  out_dir: "outputs_fever_gold_lagrangian"
+
+model:
+  name: "microsoft/deberta-v3-base"
+  num_labels: 3
+  label_smoothing: 0.05
+  dropout: 0.1
+  max_length: 256
+
+data:
+  max_train: null
+  max_dev: null
+  dev_test_ratio: 0.1         # Hold out 10% of labelled_dev for final eval
+
+train:
+  epochs: 3
+  batch_size: 16
+  grad_accum_steps: 2
+  lr: 2.0e-5
+  warmup_ratio: 0.06
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  fp16: true
+  eval_every_steps: 500
+  eval_strategy: "steps"
+  patience: 5
+
+logic:
+  lambda: 0.05
+  lambda_lr: 0.01
+  lambda_max: 2.0
+  epsilon: 0.05
+  constraint_weights:
+    date_contradiction: 1.0
+    number_contradiction: 1.0
+    negation_mismatch: 0.8
+    low_entity_overlap: 0.5
+    empty_evidence: 0.3
+
+lagrangian:
+  epsilon: 0.05
+  alpha: 0.01
+  rho: 1.0
+  lam_max: 2.0

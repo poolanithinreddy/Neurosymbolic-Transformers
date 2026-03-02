@@ -23,6 +23,7 @@ data:
   max_train: null              # null = use all ~145k train samples
   max_dev: null                # null = use all ~19k labelled_dev
   dev_sample: 2000             # subset for periodic eval during training
+  dev_test_ratio: 0.1          # hold out 10% of labelled_dev for final eval
 
 train:
   epochs: 3
@@ -34,6 +35,7 @@ train:
   max_grad_norm: 1.0
   fp16: true
   eval_every_steps: 500
+  eval_strategy: "steps"
   patience: 5
 
 logic:

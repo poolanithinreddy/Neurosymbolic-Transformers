@@ -1,0 +1,10 @@
+{
+  "n_needed": 14533,
+  "n_found": 14363,
+  "n_missing": 170,
+  "n_scanned": 5416537,
+  "elapsed_s": 218.6,
+  "cache_path": "data/fever_wiki.db",
+  "cache_size_mb": 24.18,
+  "titles_hash": "abb35a2d21170059"
+}
