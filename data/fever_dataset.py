@@ -248,49 +248,105 @@ def load_fever_splits(
                 continue
 
         data = ds[hf_split]
-        max_n = max_train if split_name == "train" else max_dev
-        if max_n is not None and max_n < len(data):
-            data = data.select(range(max_n))
+        columns = data.column_names if hasattr(data, "column_names") else []
 
-        # Collect all evidence page titles needed for this split
-        needed_titles = set()
-        for row in data:
-            evidence_raw = row.get("evidence", [])
-            for eset in (evidence_raw or []):
-                if not eset:
-                    continue
-                for ann in eset:
-                    if ann and len(ann) >= 4 and ann[2] is not None:
-                        needed_titles.add(ann[2])
+        # Detect format: flat-row (evidence_wiki_url column) vs nested (evidence column)
+        is_flat = "evidence_wiki_url" in columns
 
-        # Lazy-load additional pages if needed and available
-        split_wiki_map = wiki_page_map  # use full map
-
-        split_items = []
-        n_with_text = 0
-        for row in data:
-            label_raw = row.get("label", "NOT ENOUGH INFO")
-            # HF fever dataset may store label as int (0=SUPPORTS,1=REFUTES,2=NEI)
-            if isinstance(label_raw, int):
-                label = FEVER_LABELS[label_raw] if label_raw < len(FEVER_LABELS) else "NOT ENOUGH INFO"
-            else:
-                label = _normalise_label(str(label_raw))
-
-            # Extract gold evidence text with wiki page lookup
-            evidence_raw = row.get("evidence", [])
-            gold_evidence = _concat_evidence_sentences(
-                evidence_raw, wiki_page_map=split_wiki_map
-            )
-            if gold_evidence and not gold_evidence.startswith("("):
-                n_with_text += 1
-
-            split_items.append({
-                "id": row.get("id", 0),
-                "claim": row.get("claim", ""),
-                "label": label,
-                "label_id": LABEL2ID[label],
-                "gold_evidence_text": gold_evidence,
+        if is_flat:
+            # ── Flat-row format ──────────────────────────────────
+            # Each row is one evidence piece. Group by claim id.
+            from collections import defaultdict
+            grouped = defaultdict(lambda: {
+                "id": 0, "claim": "", "label_raw": "NOT ENOUGH INFO",
+                "evidence_pieces": []
             })
+            for row in data:
+                cid = row.get("id", 0)
+                entry = grouped[cid]
+                entry["id"] = cid
+                entry["claim"] = row.get("claim", "")
+                entry["label_raw"] = row.get("label", "NOT ENOUGH INFO")
+                wiki_url = row.get("evidence_wiki_url", "")
+                sent_id = row.get("evidence_sentence_id", -1)
+                if wiki_url and sent_id >= 0:
+                    entry["evidence_pieces"].append((wiki_url, sent_id))
+
+            # Sort by id for determinism, then limit
+            all_ids = sorted(grouped.keys())
+            max_n = max_train if split_name == "train" else max_dev
+            if max_n is not None and max_n < len(all_ids):
+                all_ids = all_ids[:max_n]
+
+            split_items = []
+            n_with_text = 0
+            for cid in all_ids:
+                entry = grouped[cid]
+                label_raw = entry["label_raw"]
+                if isinstance(label_raw, int):
+                    label = FEVER_LABELS[label_raw] if label_raw < len(FEVER_LABELS) else "NOT ENOUGH INFO"
+                else:
+                    label = _normalise_label(str(label_raw))
+
+                # Resolve evidence text from wiki cache
+                pieces = []
+                seen = set()
+                for wiki_title, sent_idx in entry["evidence_pieces"]:
+                    key = (wiki_title, sent_idx)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    if wiki_page_map and wiki_title in wiki_page_map:
+                        sents = wiki_page_map[wiki_title]
+                        if isinstance(sent_idx, int) and 0 <= sent_idx < len(sents):
+                            text = sents[sent_idx].strip()
+                            if text:
+                                pieces.append(text)
+                                continue
+                    # Fallback: use title
+                    pieces.append(wiki_title.replace("_", " "))
+                gold_evidence = " . ".join(pieces)
+                if gold_evidence:
+                    n_with_text += 1
+
+                split_items.append({
+                    "id": cid,
+                    "claim": entry["claim"],
+                    "label": label,
+                    "label_id": LABEL2ID[label],
+                    "gold_evidence_text": gold_evidence,
+                })
+        else:
+            # ── Nested format (original) ─────────────────────────
+            max_n = max_train if split_name == "train" else max_dev
+            if max_n is not None and max_n < len(data):
+                data = data.select(range(max_n))
+
+            split_wiki_map = wiki_page_map
+
+            split_items = []
+            n_with_text = 0
+            for row in data:
+                label_raw = row.get("label", "NOT ENOUGH INFO")
+                if isinstance(label_raw, int):
+                    label = FEVER_LABELS[label_raw] if label_raw < len(FEVER_LABELS) else "NOT ENOUGH INFO"
+                else:
+                    label = _normalise_label(str(label_raw))
+
+                evidence_raw = row.get("evidence", [])
+                gold_evidence = _concat_evidence_sentences(
+                    evidence_raw, wiki_page_map=split_wiki_map
+                )
+                if gold_evidence and not gold_evidence.startswith("("):
+                    n_with_text += 1
+
+                split_items.append({
+                    "id": row.get("id", 0),
+                    "claim": row.get("claim", ""),
+                    "label": label,
+                    "label_id": LABEL2ID[label],
+                    "gold_evidence_text": gold_evidence,
+                })
 
         result[split_name] = split_items
         logger.info(

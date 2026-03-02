@@ -115,7 +115,12 @@ def cache_stats(db_path: str = _DEFAULT_CACHE_PATH) -> dict[str, Any]:
 
 def _collect_needed_titles(ds, max_train: int | None = None,
                            max_dev: int | None = None) -> set[str]:
-    """Pass 1: Scan train + dev annotations to find referenced page titles."""
+    """Pass 1: Scan train + dev annotations to find referenced page titles.
+
+    Handles two HF FEVER formats:
+      - Nested: row['evidence'] = [[[ann_id, ev_id, wiki_url, sent_id], ...], ...]
+      - Flat:   row['evidence_wiki_url'] = 'Page_Title'  (one row per evidence piece)
+    """
     needed = set()
     for split_name, hf_split in [("train", "train"), ("dev", "labelled_dev")]:
         if hf_split not in ds:
@@ -132,16 +137,26 @@ def _collect_needed_titles(ds, max_train: int | None = None,
         if max_n is not None and max_n < len(data):
             data = data.select(range(max_n))
 
-        for row in data:
-            evidence_sets = row.get("evidence", [])
-            if not evidence_sets:
-                continue
-            for eset in evidence_sets:
-                if not eset:
+        columns = data.column_names if hasattr(data, 'column_names') else []
+
+        # Flat-row format: evidence_wiki_url is a column
+        if "evidence_wiki_url" in columns:
+            for row in data:
+                url = row.get("evidence_wiki_url", "")
+                if url:
+                    needed.add(url)
+        else:
+            # Nested format
+            for row in data:
+                evidence_sets = row.get("evidence", [])
+                if not evidence_sets:
                     continue
-                for ann in eset:
-                    if ann and len(ann) >= 4 and ann[2] is not None:
-                        needed.add(ann[2])
+                for eset in evidence_sets:
+                    if not eset:
+                        continue
+                    for ann in eset:
+                        if ann and len(ann) >= 4 and ann[2] is not None:
+                            needed.add(ann[2])
 
     return needed
 
@@ -211,17 +226,40 @@ def build_wiki_cache(
 
     if not needed:
         logger.warning("  No page titles found — nothing to cache")
-        return {"n_needed": 0, "n_found": 0, "n_missing": 0, "elapsed_s": 0}
+        return {"n_needed": 0, "n_found": 0, "n_missing": 0, "elapsed_s": 0,
+                "cache_path": cache_path, "cache_size_mb": 0.0, "n_scanned": 0}
 
     # ── Pass 2: Stream wiki_pages, keep only needed ────────────
-    if "wiki_pages" not in ds:
-        raise RuntimeError(
-            "HF fever/v1.0 dataset does not have 'wiki_pages' split. "
-            "Cannot build cache. Try: datasets.load_dataset('fever', 'wiki_pages')"
-        )
+    # wiki_pages may be a separate config or a split within v1.0
+    wiki_data = None
+    if "wiki_pages" in ds:
+        wiki_data = ds["wiki_pages"]
+    elif "wikipedia_pages" in ds:
+        wiki_data = ds["wikipedia_pages"]
+    else:
+        # Load wiki_pages as a separate HF config
+        logger.info("  wiki_pages not in v1.0 — loading fever/wiki_pages separately...")
+        try:
+            wp_ds = load_dataset(
+                "fever", "wiki_pages",
+                cache_dir=hf_cache_dir,
+                trust_remote_code=True,
+            )
+            # The split name may be 'wikipedia_pages' or 'train'
+            for sp in ["wikipedia_pages", "wiki_pages", "train"]:
+                if sp in wp_ds:
+                    wiki_data = wp_ds[sp]
+                    break
+        except Exception as e:
+            raise RuntimeError(
+                f"Cannot load wiki_pages: {e}. "
+                "Try: datasets.load_dataset('fever', 'wiki_pages')"
+            )
 
-    logger.info("  Pass 2: Streaming wiki_pages, filtering to needed titles...")
-    wiki_data = ds["wiki_pages"]
+    if wiki_data is None:
+        raise RuntimeError("Could not find wiki_pages data in any expected location.")
+
+    logger.info(f"  Pass 2: Streaming {len(wiki_data)} wiki pages, filtering to {len(needed)} needed titles...")
 
     # Create/overwrite SQLite DB
     os.makedirs(os.path.dirname(cache_path) or ".", exist_ok=True)
@@ -245,11 +283,11 @@ def build_wiki_cache(
 
     for page in wiki_data:
         n_scanned += 1
-        title = page.get("id", page.get("title", ""))
+        title = page.get("id", page.get("title", page.get("wikipedia_id", "")))
         if not title or title not in needed:
             continue
 
-        lines_raw = page.get("lines", page.get("text", ""))
+        lines_raw = page.get("lines", page.get("text", page.get("wikipedia_text", "")))
         if not lines_raw:
             continue
 
