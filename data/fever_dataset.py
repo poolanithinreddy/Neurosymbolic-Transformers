@@ -184,6 +184,9 @@ class _WikiCacheAdapter:
         result = self._cache.lookup(title)
         return result if result is not None else default
 
+    def __len__(self) -> int:
+        return len(self._cache)
+
     def __bool__(self) -> bool:
         return True  # non-empty cache is truthy
 
