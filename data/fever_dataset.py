@@ -23,6 +23,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 from typing import Any
 
 import torch
@@ -503,10 +504,33 @@ class FeverPipelineDataset(Dataset):
         }
 
 
+def _clean_evidence(evidence: str) -> str:
+    """Clean and deduplicate evidence text for better NLI performance.
+
+    Removes duplicate sentences, normalises whitespace, and ensures
+    each evidence sentence is separated by a period.
+    """
+    if not evidence:
+        return ""
+    # Split on common evidence separators
+    sentences = re.split(r'\s*\.\s*|\s*;\s*', evidence)
+    seen: set[str] = set()
+    unique: list[str] = []
+    for s in sentences:
+        s = s.strip()
+        if not s:
+            continue
+        s_lower = s.lower()
+        if s_lower not in seen:
+            seen.add(s_lower)
+            unique.append(s)
+    return " . ".join(unique)
+
+
 def fever_collate_fn(
     batch: list[dict],
     tokenizer,
-    max_length: int = 256,
+    max_length: int = 384,
 ) -> dict:
     """Tokenize and collate a batch of FEVER examples.
 
@@ -514,23 +538,25 @@ def fever_collate_fn(
     tokens (``[CLS]``, ``[SEP]`` / ``</s>``, token-type IDs) are
     inserted correctly for each backbone (BERT, DeBERTa, RoBERTa, …).
 
-    Previous version concatenated ``claim [SEP] evidence`` as a flat
-    string, which inserted literal ``[SEP]`` text into DeBERTa's
-    SentencePiece vocabulary — a significant tokenisation error.
+    Key design decisions for maximising NLI accuracy:
+      - ``truncation="only_second"`` — NEVER truncate the claim, only evidence
+      - Evidence is cleaned and deduplicated before tokenisation
+      - ``max_length=384`` by default for more evidence context
 
     Output: input_ids, attention_mask, labels (+ raw claim/evidence for
     downstream constraint extraction).
     """
     claims = [ex["claim"] for ex in batch]
-    evidences = [ex["evidence"] for ex in batch]
+    evidences = [_clean_evidence(ex["evidence"]) for ex in batch]
     labels = torch.tensor([ex["label_id"] for ex in batch], dtype=torch.long)
 
     # Native sentence-pair encoding: tokenizer(text, text_pair)
+    # truncation="only_second" ensures the claim is NEVER truncated
     encoding = tokenizer(
         claims,
         evidences,
         padding=True,
-        truncation=True,
+        truncation="only_second",
         max_length=max_length,
         return_tensors="pt",
     )

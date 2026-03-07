@@ -44,14 +44,22 @@ def build_fever_model(
     num_labels: int = NUM_LABELS,
     label_smoothing: float = 0.0,
     dropout: float = 0.1,
+    use_lora: bool = False,
+    lora_rank: int = 16,
+    lora_alpha: int = 32,
+    gradient_checkpointing: bool = False,
 ) -> tuple[AutoTokenizer, nn.Module]:
     """Build DeBERTa NLI model and tokenizer.
 
     Args:
-        model_name: HuggingFace model name.
+        model_name: HuggingFace model name (supports base + large).
         num_labels: number of output classes (3 for FEVER).
         label_smoothing: label smoothing factor (0 = off).
         dropout: classifier dropout.
+        use_lora: whether to apply LoRA adapters.
+        lora_rank: LoRA rank (default 16).
+        lora_alpha: LoRA alpha scaling (default 32).
+        gradient_checkpointing: enable gradient checkpointing for memory savings.
 
     Returns:
         (tokenizer, model) tuple.
@@ -78,7 +86,39 @@ def build_fever_model(
         config=config,
     )
 
-    logger.info(f"Model loaded: {model_name} ({sum(p.numel() for p in model.parameters())/1e6:.1f}M params)")
+    # Gradient checkpointing (saves ~40% memory on large models)
+    if gradient_checkpointing:
+        model.gradient_checkpointing_enable()
+        logger.info("Gradient checkpointing enabled")
+
+    # LoRA: parameter-efficient fine-tuning
+    if use_lora:
+        try:
+            from peft import LoraConfig, get_peft_model, TaskType
+
+            lora_config = LoraConfig(
+                task_type=TaskType.SEQ_CLS,
+                r=lora_rank,
+                lora_alpha=lora_alpha,
+                lora_dropout=0.05,
+                target_modules=["query_proj", "key_proj", "value_proj", "dense"],
+                bias="none",
+            )
+            model = get_peft_model(model, lora_config)
+
+            total_params = sum(p.numel() for p in model.parameters())
+            trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+            logger.info(
+                f"LoRA applied: r={lora_rank}, alpha={lora_alpha}, "
+                f"trainable={trainable/1e6:.1f}M / {total_params/1e6:.1f}M "
+                f"({100*trainable/total_params:.1f}%)"
+            )
+        except ImportError:
+            logger.warning("peft not installed; skipping LoRA. pip install peft")
+
+    n_params = sum(p.numel() for p in model.parameters())
+    n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    logger.info(f"Model loaded: {model_name} ({n_params/1e6:.1f}M total, {n_trainable/1e6:.1f}M trainable)")
     return tokenizer, model
 
 

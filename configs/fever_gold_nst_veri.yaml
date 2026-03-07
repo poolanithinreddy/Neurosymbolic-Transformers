@@ -1,0 +1,72 @@
+# FEVER Gold Evidence — NST-VERI (Flagship Method)
+# DeBERTa-v3-large + LoRA + verification heads + contrastive + adaptive lambda
+# 3-phase training: Phase 1 (NLI+aux), Phase 2 (+contrastive), Phase 3 (+constraints)
+# Target: >90% label accuracy on labelled_dev, <0.05 ECE
+
+mode: "veri"
+device: "auto"
+seed: 42
+
+task: "fever"
+evidence_mode: "gold"          # Setting A: oracle gold evidence
+
+io:
+  out_dir: "outputs_fever_gold_nst_veri"
+
+model:
+  name: "microsoft/deberta-v3-large"
+  num_labels: 3
+  label_smoothing: 0.05
+  dropout: 0.1
+  max_length: 384              # Longer context: never truncate claims
+  use_lora: true
+  lora_rank: 16
+  lora_alpha: 32
+  gradient_checkpointing: true
+  pretrained_path: null        # Set to MNLI checkpoint path if available
+
+data:
+  evidence_mode: "gold"        # Setting A: oracle gold evidence
+  max_train: null              # Full ~145k training set
+  max_dev: null                # Full ~19k labelled_dev
+  dev_sample: 2000             # Fast periodic eval subset
+  dev_test_ratio: 0.1          # 10% held-out dev split
+
+train:
+  epochs: 5                    # 3 phases across 5 epochs
+  batch_size: 16
+  grad_accum_steps: 4          # effective batch = 64
+  lr: 1.0e-5                   # backbone learning rate
+  lr_lora: 3.0e-4              # LoRA adapters
+  lr_heads: 5.0e-4             # verification + classification heads
+  lr_gate: 1.0e-3              # adaptive lambda gate
+  warmup_ratio: 0.06
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  bf16: true                   # BF16 for A100/H100 (set fp16: true for older GPUs)
+  fp16: false
+  torch_compile: false         # Set true for A100/H100 with PyTorch 2.x
+  compile_mode: "reduce-overhead"
+  fused_optimizer: true
+  eval_every_steps: 250
+  eval_strategy: "steps"
+  patience: 6
+  num_workers: 4
+
+# NST-VERI specific settings
+veri:
+  n_constraints: 6             # 6 probabilistic constraints
+  lambda_max: 0.3              # Maximum constraint weight (at end of Phase 3)
+  contrastive_temperature: 0.07
+
+# Legacy constraint config (unused for veri mode, kept for compatibility)
+logic:
+  lambda: 0.0
+  constraint_weights: null
+
+# Lagrangian settings (unused for veri, used by lagrangian/cegis modes)
+lagrangian:
+  epsilon: 0.05
+  alpha: 0.01
+  rho: 1.0
+  lam_max: 10.0

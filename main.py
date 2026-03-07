@@ -78,6 +78,48 @@ def cmd_train_fever_nst(args):
     train_fever_nst(args.config, outdir_override=args.outdir)
 
 
+def cmd_train_fever_veri(args):
+    """Train NST-VERI: flagship neurosymbolic method."""
+    from training.train_nst_veri import train_nst_veri
+    train_nst_veri(args.config, outdir_override=args.outdir)
+
+
+def cmd_pretrain_mnli(args):
+    """Pre-fine-tune DeBERTa on MNLI for FEVER."""
+    from training.pretrain_mnli import pretrain_mnli
+    pretrain_mnli(
+        model_name=args.model,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        lr=args.lr,
+        max_train=args.max_train,
+        out_dir=args.out_dir,
+        seed=args.seed,
+        use_lora=not args.no_lora,
+    )
+
+
+def cmd_leakage_check(args):
+    """Run data leakage checks on FEVER splits."""
+    import logging as _logging
+    _logging.basicConfig(level=_logging.INFO)
+    from data.fever_dataset import load_fever_splits
+    from eval.leakage_check import full_leakage_report
+    splits = load_fever_splits(
+        seed=args.seed, max_train=args.max_train, max_dev=args.max_dev,
+    )
+    report = full_leakage_report(splits)
+    verdict = report["verdict"]
+    print(f"\nLeakage verdict: {'CLEAN' if verdict['clean'] else 'ISSUES FOUND'}")
+    for issue in verdict.get("issues", []):
+        print(f"  - {issue}")
+    if args.out:
+        import json as _json
+        with open(args.out, "w") as f:
+            _json.dump(report, f, indent=2, default=str)
+        print(f"Report saved to {args.out}")
+
+
 def cmd_fever_stats(args):
     """Print FEVER dataset statistics and split hashes."""
     from data.fever_dataset import load_fever_splits, print_fever_stats
@@ -448,6 +490,32 @@ def main():
     p_fnst.add_argument("--config", required=True, help="YAML config path")
     p_fnst.add_argument("--outdir", default=None)
 
+    # train-fever-veri (NST-VERI flagship)
+    p_veri = subparsers.add_parser("train-fever-veri",
+                                    help="Train NST-VERI: flagship neurosymbolic method")
+    p_veri.add_argument("--config", required=True, help="YAML config path")
+    p_veri.add_argument("--outdir", default=None)
+
+    # pretrain-mnli
+    p_mnli = subparsers.add_parser("pretrain-mnli",
+                                    help="Pre-fine-tune DeBERTa on MNLI for FEVER")
+    p_mnli.add_argument("--model", default="microsoft/deberta-v3-large")
+    p_mnli.add_argument("--epochs", type=int, default=1)
+    p_mnli.add_argument("--batch-size", type=int, default=32)
+    p_mnli.add_argument("--lr", type=float, default=2e-5)
+    p_mnli.add_argument("--max-train", type=int, default=None)
+    p_mnli.add_argument("--out-dir", default="outputs_mnli_pretrain")
+    p_mnli.add_argument("--seed", type=int, default=42)
+    p_mnli.add_argument("--no-lora", action="store_true")
+
+    # leakage-check
+    p_leak = subparsers.add_parser("leakage-check",
+                                    help="Run data leakage checks on FEVER splits")
+    p_leak.add_argument("--seed", type=int, default=42)
+    p_leak.add_argument("--max-train", type=int, default=None)
+    p_leak.add_argument("--max-dev", type=int, default=None)
+    p_leak.add_argument("--out", type=str, default=None, help="Save report to JSON")
+
     # fever-stats
     p_fstats = subparsers.add_parser("fever-stats", help="Print FEVER dataset statistics")
     p_fstats.add_argument("--max_train", type=int, default=None)
@@ -573,6 +641,9 @@ def main():
         "data-stats": cmd_data_stats,
         "train-fever": cmd_train_fever,
         "train-fever-nst": cmd_train_fever_nst,
+        "train-fever-veri": cmd_train_fever_veri,
+        "pretrain-mnli": cmd_pretrain_mnli,
+        "leakage-check": cmd_leakage_check,
         "fever-stats": cmd_fever_stats,
         "build-fever-wiki-cache": cmd_build_fever_wiki_cache,
         "eval-fever": cmd_eval_fever,
