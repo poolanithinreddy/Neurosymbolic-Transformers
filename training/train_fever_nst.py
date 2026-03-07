@@ -374,6 +374,22 @@ def train_fever_nst(
         seed=seed,
     )
 
+    # Optional: smaller dev subset for fast periodic evaluation
+    dev_sample = data_cfg.get("dev_sample", None)
+    if dev_sample and isinstance(dev_sample, int) and dev_sample < len(dev_ds):
+        from torch.utils.data import Subset
+        rng = random.Random(seed)
+        dev_sample_indices = rng.sample(range(len(dev_ds)), dev_sample)
+        dev_sample_ds = Subset(dev_ds, dev_sample_indices)
+        dev_sample_loader = _build_dataloader(
+            dev_sample_ds, tokenizer, batch_size, max_length,
+            shuffle=False, num_workers=num_workers, pin_memory=pin_memory,
+            seed=seed,
+        )
+        logger.info(f"Periodic eval uses dev subset: {dev_sample}/{len(dev_ds)} examples")
+    else:
+        dev_sample_loader = dev_loader
+
     # ── Optimizer + Scheduler ────────────────────────────────
     # Build constraint gate for 'gated' mode
     constraint_gate = None
@@ -494,6 +510,8 @@ def train_fever_nst(
                     "converged": False,
                 })
 
+        round_label = f"R{cegis_round}/" if mode == "cegis" else ""
+
         # Inner training loop
         for epoch in range(epochs):
             if nan_abort:
@@ -584,11 +602,11 @@ def train_fever_nst(
                     optimizer.zero_grad()
                     global_step += 1
 
-                    # Step-level evaluation
+                    # Step-level evaluation (uses dev_sample_loader for speed)
                     if (eval_strategy == "steps"
                             and eval_every > 0
                             and global_step % eval_every == 0):
-                        dev_metrics = _eval_split(model, dev_loader, device)
+                        dev_metrics = _eval_split(model, dev_sample_loader, device)
                         dev_acc = dev_metrics["accuracy"]
                         lam_str = f" λ={lag_state.lam:.4f}" if mode != "neural" else ""
                         print(
@@ -646,7 +664,6 @@ def train_fever_nst(
                 )
 
             # Evaluation (epoch-level)
-            round_label = f"R{cegis_round}/" if mode == "cegis" else ""
             do_epoch_eval = (
                 eval_strategy == "epoch"
                 and ((epoch + 1) % eval_every == 0 or epoch == epochs - 1)
