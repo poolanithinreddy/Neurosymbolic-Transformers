@@ -59,6 +59,21 @@ from training.config_validation import load_and_validate_config
 logger = logging.getLogger("train_fever")
 
 
+def _deep_update(base: dict, overrides: dict) -> dict:
+    """Recursively merge *overrides* into *base* config dict (in-place)."""
+    for k, v in overrides.items():
+        if isinstance(v, dict) and isinstance(base.get(k), dict):
+            _deep_update(base[k], v)
+        else:
+            base[k] = v
+    return base
+
+
+def _unwrap(model):
+    """Unwrap torch.compile'd model to access original module."""
+    return getattr(model, '_orig_mod', model)
+
+
 def _auto_device(preferred: str | None = None) -> str:
     if preferred in (None, "auto"):
         if torch.cuda.is_available():
@@ -95,6 +110,7 @@ def _build_dataloader(
         pin_memory=pin_memory,
         drop_last=False,
         generator=generator if shuffle else None,
+        persistent_workers=num_workers > 0,
     )
 
 
@@ -202,6 +218,7 @@ def _mine_counterexamples(
 def train_fever_nst(
     config_path: str,
     outdir_override: str | None = None,
+    config_overrides: dict | None = None,
 ) -> dict:
     """Train FEVER NLI model with NST constraints.
 
@@ -217,6 +234,8 @@ def train_fever_nst(
     """
     # ── Load config ──────────────────────────────────────────
     cfg = load_and_validate_config(config_path)
+    if config_overrides:
+        _deep_update(cfg, config_overrides)
     mode = cfg.get("mode", "neural")
     seed = int(cfg.get("seed", 42))
 
@@ -254,6 +273,12 @@ def train_fever_nst(
     patience = int(train_cfg.get("patience", 5))
     num_workers = int(train_cfg.get("num_workers", 0))
     fp16 = train_cfg.get("fp16", device == "cuda")
+    bf16 = train_cfg.get("bf16", False)
+    if bf16:
+        fp16 = False  # bf16 takes priority over fp16
+    use_compile = train_cfg.get("torch_compile", False)
+    enable_tf32 = train_cfg.get("tf32", False)
+    enable_benchmark = train_cfg.get("benchmark", False)
 
     # Model config — support nested 'model' section
     model_cfg = cfg.get("model", {})
@@ -295,6 +320,16 @@ def train_fever_nst(
     gate_dropout = float(gate_cfg.get("dropout", 0.1))
     gate_init_bias = float(gate_cfg.get("init_bias", 0.5))
     gate_lr_mult = float(gate_cfg.get("lr_multiplier", 10.0))  # Gate learns faster than backbone
+
+    # ── Performance tuning (Ampere+ / Hopper GPUs) ────────
+    if enable_tf32 and device == "cuda":
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        logger.info("TF32 enabled for matmul and cuDNN")
+    if enable_benchmark and device == "cuda":
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.deterministic = False
+        logger.info("cuDNN benchmark mode enabled")
 
     # ── Load data ────────────────────────────────────────────
     logger.info("Loading FEVER dataset...")
@@ -401,6 +436,18 @@ def train_fever_nst(
         ).to(device)
         logger.info(f"ECCG gate params: {sum(p.numel() for p in constraint_gate.parameters())}")
 
+    # ── torch.compile (Ampere+ / Hopper GPUs) ────────────────
+    _compiled = False
+    if use_compile and hasattr(torch, "compile"):
+        try:
+            model = torch.compile(model)
+            if constraint_gate is not None:
+                constraint_gate = torch.compile(constraint_gate)
+            _compiled = True
+            logger.info("torch.compile enabled — first batch will be slow (compilation)")
+        except Exception as e:
+            logger.warning(f"torch.compile failed, using eager mode: {e}")
+
     # Separate param groups: backbone at lr, gate at lr * multiplier
     param_groups = [{"params": list(model.parameters()), "lr": lr}]
     if constraint_gate is not None:
@@ -433,9 +480,16 @@ def train_fever_nst(
     )
 
     # ── Mixed precision ──────────────────────────────────────
-    use_amp = fp16 and device == "cuda"
-    scaler = torch.amp.GradScaler("cuda") if use_amp else None
-    amp_dtype = torch.float16 if use_amp else torch.float32
+    use_amp = (fp16 or bf16) and device == "cuda"
+    if bf16 and device == "cuda":
+        amp_dtype = torch.bfloat16
+        scaler = None  # BF16 has sufficient dynamic range — no GradScaler needed
+    elif fp16 and device == "cuda":
+        amp_dtype = torch.float16
+        scaler = torch.amp.GradScaler("cuda")
+    else:
+        amp_dtype = torch.float32
+        scaler = None
 
     # ── Training loop ────────────────────────────────────────
     best_dev_acc = 0.0
@@ -448,10 +502,11 @@ def train_fever_nst(
     n_rounds = max_rounds if mode == "cegis" else 1
     cegis_log = [] if mode == "cegis" else None
 
+    _prec = "bf16" if bf16 else ("fp16" if fp16 else "fp32")
     print(f"\n{'='*60}")
     print(f"  FEVER Training: mode={mode}, model={model_name}")
-    print(f"  epochs={epochs}, bs={batch_size}, lr={lr}, device={device}")
-    print(f"  evidence_mode={evidence_mode}, fp16={use_amp}")
+    print(f"  epochs={epochs}, bs={batch_size}x{grad_accum_steps}, lr={lr}, device={device}")
+    print(f"  evidence_mode={evidence_mode}, precision={_prec}, compile={_compiled}")
     if mode == "gated":
         print(f"  ECCG gate: hidden={gate_hidden}, lr_mult={gate_lr_mult}")
     print(f"  total_steps={total_steps}, warmup={warmup_steps}")
@@ -631,7 +686,7 @@ def train_fever_nst(
                             patience_counter = 0
                             ckpt_dir = os.path.join(outdir, "ckpt")
                             os.makedirs(ckpt_dir, exist_ok=True)
-                            model.model.save_pretrained(ckpt_dir)
+                            _unwrap(model).model.save_pretrained(ckpt_dir)
                             tokenizer.save_pretrained(ckpt_dir)
                             torch.save(
                                 {"global_step": global_step, "best_dev_acc": best_dev_acc, "mode": mode},
@@ -700,7 +755,7 @@ def train_fever_nst(
                     # Save best model
                     ckpt_dir = os.path.join(outdir, "ckpt")
                     os.makedirs(ckpt_dir, exist_ok=True)
-                    model.model.save_pretrained(ckpt_dir)
+                    _unwrap(model).model.save_pretrained(ckpt_dir)
                     tokenizer.save_pretrained(ckpt_dir)
                     torch.save(
                         {"epoch": epoch, "best_dev_acc": best_dev_acc, "mode": mode},
@@ -796,7 +851,7 @@ def train_fever_nst(
     if constraint_gate is not None:
         gate_path = os.path.join(outdir, "ckpt", "constraint_gate.pt")
         os.makedirs(os.path.dirname(gate_path), exist_ok=True)
-        torch.save(constraint_gate.state_dict(), gate_path)
+        torch.save(_unwrap(constraint_gate).state_dict(), gate_path)
         logger.info(f"Constraint gate saved to {gate_path}")
 
     # Save training log
