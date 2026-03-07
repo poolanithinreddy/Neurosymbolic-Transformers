@@ -1,0 +1,60 @@
+# FEVER Gold Evidence — Full Baseline on A100 (Stage A)
+# ──────────────────────────────────────────────────────
+# DeBERTa-v3-large + LoRA r=16 for parameter-efficient fine-tuning
+# Pure neural cross-entropy, no symbolic constraints
+# Gold evidence (Setting A): oracle evidence provided
+# Honest evaluation with held-out dev_test
+#
+# Expected: ~88-90% label accuracy on labelled_dev
+# Runtime:  ~25-40 min on A100-40GB
+
+mode: "neural"
+device: "auto"
+seed: 42
+
+task: "fever"
+evidence_mode: "gold"
+
+io:
+  out_dir: "outputs_fever_baseline"
+
+model:
+  name: "microsoft/deberta-v3-large"
+  num_labels: 3
+  label_smoothing: 0.05
+  dropout: 0.1
+  max_length: 384
+  use_lora: true
+  lora_rank: 16
+  lora_alpha: 32
+  gradient_checkpointing: true
+
+data:
+  max_train: null              # Full ~145K train
+  max_dev: null                # Full ~19K labelled_dev
+  evidence_mode: "gold"
+  dev_sample: 2000             # Periodic eval on 2K dev subset (fast)
+  dev_test_ratio: 0.1          # Hold out 10% dev for final reporting
+
+train:
+  epochs: 3
+  batch_size: 32               # A100: 32, safe with large + LoRA + seq 384
+  grad_accum_steps: 2          # Effective batch = 64
+  lr: 2.0e-5                   # Backbone LR (frozen for LoRA, but classifier head uses this)
+  lr_lora: 3.0e-4              # LoRA adapter LR (higher for adapter layers)
+  warmup_ratio: 0.06
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  bf16: true
+  fp16: false
+  torch_compile: false         # DeBERTa-v3 has compile issues; skip for stability
+  tf32: true
+  benchmark: true
+  fused_optimizer: true
+  eval_every_steps: 500
+  eval_strategy: "steps"
+  patience: 5
+  num_workers: 4
+
+logic:
+  lambda: 0.0                  # No constraints for baseline

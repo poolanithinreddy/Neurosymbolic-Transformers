@@ -88,7 +88,7 @@ def _build_dataloader(
     dataset,
     tokenizer,
     batch_size: int,
-    max_length: int = 256,
+    max_length: int = 384,
     shuffle: bool = True,
     num_workers: int = 0,
     pin_memory: bool = False,
@@ -97,10 +97,13 @@ def _build_dataloader(
     """Build DataLoader with tokenizing collate function.
 
     Uses a seeded ``torch.Generator`` for reproducible shuffle order.
+    Optimized for GPU training with persistent workers and prefetch.
     """
     collate = partial(fever_collate_fn, tokenizer=tokenizer, max_length=max_length)
     generator = torch.Generator()
     generator.manual_seed(seed)
+    use_persistent = num_workers > 0
+    pf = 4 if num_workers > 0 else None
     return DataLoader(
         dataset,
         batch_size=batch_size,
@@ -108,9 +111,10 @@ def _build_dataloader(
         collate_fn=collate,
         num_workers=num_workers,
         pin_memory=pin_memory,
-        drop_last=False,
+        drop_last=shuffle,  # Even batch sizes for stability
         generator=generator if shuffle else None,
-        persistent_workers=num_workers > 0,
+        persistent_workers=use_persistent,
+        prefetch_factor=pf,
     )
 
 
@@ -285,7 +289,13 @@ def train_fever_nst(
     model_name = model_cfg.get("name", cfg.get("model_name", "microsoft/deberta-v3-base"))
     label_smoothing = float(model_cfg.get("label_smoothing", cfg.get("label_smoothing", 0.0)))
     dropout = float(model_cfg.get("dropout", cfg.get("dropout", 0.1)))
-    max_length = int(model_cfg.get("max_length", train_cfg.get("max_length", 256)))
+    max_length = int(model_cfg.get("max_length", train_cfg.get("max_length", 384)))
+    use_lora = model_cfg.get("use_lora", False)
+    lora_rank = int(model_cfg.get("lora_rank", 16))
+    lora_alpha = int(model_cfg.get("lora_alpha", 32))
+    gradient_checkpointing = model_cfg.get("gradient_checkpointing", False)
+    lr_lora = float(train_cfg.get("lr_lora", 3e-4))
+    use_fused = train_cfg.get("fused_optimizer", False)
 
     # Data config
     data_cfg = cfg.get("data", {})
@@ -375,6 +385,10 @@ def train_fever_nst(
         model_name=model_name,
         label_smoothing=label_smoothing,
         dropout=dropout,
+        use_lora=use_lora,
+        lora_rank=lora_rank,
+        lora_alpha=lora_alpha,
+        gradient_checkpointing=gradient_checkpointing,
     )
 
     # Compute class weights for imbalanced FEVER labels
@@ -448,17 +462,51 @@ def train_fever_nst(
         except Exception as e:
             logger.warning(f"torch.compile failed, using eager mode: {e}")
 
-    # Separate param groups: backbone at lr, gate at lr * multiplier
-    param_groups = [{"params": list(model.parameters()), "lr": lr}]
+    # Separate param groups: backbone at base lr, LoRA at higher lr, gate at highest
+    backbone_params = []
+    lora_params = []
+    for name, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        if "lora" in name.lower():
+            lora_params.append(p)
+        else:
+            backbone_params.append(p)
+
+    param_groups = []
+    if backbone_params:
+        param_groups.append({"params": backbone_params, "lr": lr, "name": "backbone"})
+    if lora_params:
+        param_groups.append({"params": lora_params, "lr": lr_lora, "name": "lora"})
+    elif not backbone_params:
+        # Fallback: all params at base lr
+        param_groups = [{"params": list(model.parameters()), "lr": lr}]
     if constraint_gate is not None:
         param_groups.append({
             "params": list(constraint_gate.parameters()),
             "lr": lr * gate_lr_mult,
+            "name": "gate",
         })
 
-    optimizer = torch.optim.AdamW(
-        param_groups, lr=lr, weight_decay=weight_decay,
-    )
+    # Log param groups
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    logger.info(f"Params: {trainable_params/1e6:.2f}M trainable / {total_params/1e6:.2f}M total")
+    for pg in param_groups:
+        n_p = sum(p.numel() for p in pg["params"])
+        logger.info(f"  {pg.get('name', '?')}: {n_p/1e6:.2f}M params, lr={pg['lr']}")
+
+    fused = use_fused and torch.cuda.is_available()
+    try:
+        optimizer = torch.optim.AdamW(
+            param_groups, lr=lr, weight_decay=weight_decay, fused=fused,
+        )
+        if fused:
+            logger.info("Using fused AdamW")
+    except TypeError:
+        optimizer = torch.optim.AdamW(
+            param_groups, lr=lr, weight_decay=weight_decay,
+        )
     total_steps = epochs * math.ceil(len(train_ds) / batch_size / grad_accum_steps)
     warmup_steps = int(total_steps * warmup_ratio)
 
@@ -503,9 +551,12 @@ def train_fever_nst(
     cegis_log = [] if mode == "cegis" else None
 
     _prec = "bf16" if bf16 else ("fp16" if fp16 else "fp32")
+    _lora_str = f" + LoRA r={lora_rank}" if use_lora else " (full FT)"
     print(f"\n{'='*60}")
-    print(f"  FEVER Training: mode={mode}, model={model_name}")
-    print(f"  epochs={epochs}, bs={batch_size}x{grad_accum_steps}, lr={lr}, device={device}")
+    print(f"  FEVER Training: mode={mode}")
+    print(f"  Model: {model_name}{_lora_str}")
+    print(f"  Trainable: {trainable_params/1e6:.2f}M / {total_params/1e6:.2f}M ({100*trainable_params/total_params:.1f}%)")
+    print(f"  epochs={epochs}, bs={batch_size}x{grad_accum_steps}={batch_size*grad_accum_steps}, lr={lr}" + (f", lr_lora={lr_lora}" if lora_params else ""))
     print(f"  evidence_mode={evidence_mode}, precision={_prec}, compile={_compiled}")
     if mode == "gated":
         print(f"  ECCG gate: hidden={gate_hidden}, lr_mult={gate_lr_mult}")
@@ -819,6 +870,15 @@ def train_fever_nst(
         "mode": mode,
         "evidence_mode": evidence_mode,
         "model_name": model_name,
+        "use_lora": use_lora,
+        "lora_rank": lora_rank if use_lora else 0,
+        "trainable_params_M": round(trainable_params / 1e6, 2),
+        "total_params_M": round(total_params / 1e6, 2),
+        "batch_size": batch_size,
+        "grad_accum_steps": grad_accum_steps,
+        "effective_batch_size": batch_size * grad_accum_steps,
+        "max_length": max_length,
+        "precision": _prec,
         "seed": seed,
         "epochs": epochs,
         "elapsed_s": round(elapsed, 1),
