@@ -354,17 +354,20 @@ class TestFeverNLIWrapper:
 
     @pytest.fixture
     def small_model(self):
-        """Build a tiny model for testing (not full DeBERTa)."""
-        import torch
-        from transformers import AutoConfig, AutoModelForSequenceClassification
+        """Build a tiny model for testing without any network access."""
+        from transformers import DebertaV2Config, DebertaV2ForSequenceClassification
 
-        # Use a tiny config for fast testing
-        config = AutoConfig.from_pretrained(
-            "hf-internal-testing/tiny-random-deberta-v2",
+        config = DebertaV2Config(
+            vocab_size=128,
+            hidden_size=32,
+            num_hidden_layers=1,
+            num_attention_heads=2,
+            intermediate_size=64,
             num_labels=3,
+            max_position_embeddings=64,
+            relative_attention=False,
         )
-        model = AutoModelForSequenceClassification.from_config(config)
-        return model
+        return DebertaV2ForSequenceClassification(config)
 
     def test_forward_output_keys(self, small_model):
         import torch

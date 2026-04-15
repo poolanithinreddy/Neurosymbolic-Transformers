@@ -1,95 +1,137 @@
-# FEVER Results — Neurosymbolic Transformers
+# NST Results Tracker
 
-> **Branch:** `fever-sota`  
-> **Model:** DeBERTa-v3-base (184M params)  
-> **Dataset:** FEVER v1.0 (train: ~145K, labelled_dev: ~19K)  
-> **Wiki Cache:** 14,363 pages (98.8% coverage)
+> **Status**: Full training pipeline operational. NST-VERI flagship method now wired.
+> Run `python main.py train-fever-veri --config configs/fever_gold_nst_veri_a100.yaml` for full results.
+>
+> **Honesty policy**: All reported numbers are from actual training runs.
+> Placeholders marked with "—" have not been measured yet.
+> If the real result is 84%, we report 84%.
 
 ---
 
-## Setting A: Gold Evidence (Oracle NLI)
+## Multi-Digit Addition
 
-Gold evidence sentences provided by FEVER annotations.
-Measures NLI classification accuracy in isolation.
+**Model**: CNN encoder (MNIST-style digits, 28×28)  
+**Task**: two-digit + two-digit addition with carry propagation  
+**Compositional split**: train on no-carry pairs, test on ≥1 carry (Comp) and 2-carry (Hard)  
+**Seeds**: {42, 43, 44}, results as mean ± std
 
-### Smoke Tests (Validation Only)
+### Smoke Tests
 
-| Config | Model | Train | Dev | Epochs | dev_acc | Time |
-|--------|-------|-------|-----|--------|---------|------|
-| `fever_micro_smoke` | BERT-tiny (4.4M) | 50 | 25 | 2 | 0.28 | 8s |
-| `fever_gold_smoke` | DeBERTa-v3-base | 200 | 100 | 1 | 0.32 | 17s |
+| Config | Mode | Samples | Epochs | Runtime |
+|--------|------|---------|--------|---------|
+| `multi_digit_smoke` | Lagrangian | 200 | 2 | ~2s CPU |
 
 ### Full Runs
 
-| Mode | Config | Label Acc | ECE ↓ | Brier ↓ | dev_test Acc | Notes |
-|------|--------|-----------|-------|---------|--------------|-------|
-| Neural | `fever_gold_neural` | — | — | — | — | Baseline (no constraints) |
-| Soft (λ=0.1) | `fever_gold_nst_soft` | — | — | — | — | Fixed constraint weight |
-| Lagrangian | `fever_gold_lagrangian` | — | — | — | — | Adaptive λ |
-| CEGIS | `fever_gold_nst_cegis` | — | — | — | — | Counterexample-guided |
-| **ECCG (novel)** | `fever_gold_nst_gated` | — | — | — | — | Evidence-Conditioned Gating |
+| Model | Sum Acc (IID) | Sum Acc (Comp) | Sum Acc (Hard) | CSR (Comp) | Comp Gap |
+|-------|--------------|----------------|----------------|------------|----------|
+| Pure Neural | — | — | — | — | — |
+| NST-Soft (λ=0.5) | — | — | — | — | — |
+| NST-Lagrangian | — | — | — | — | — |
+| Random Replay | — | — | — | — | — |
+| Hard Mining | — | — | — | — | — |
+| Same Budget | — | — | — | — | — |
+| **NST-CEGIS** | — | — | — | — | — |
 
-*Full runs pending — requires GPU for reasonable training time (~3h per config on T4).*
-
----
-
-## Setting B: Retrieved Evidence (Full Pipeline)
-
-Evidence retrieved via BM25 from Wikipedia dump.
-Gold evidence **NEVER** accessed. Measures end-to-end performance.
-
-| Mode | Config | FEVER Score | Label Acc | Recall@5 | Notes |
-|------|--------|-------------|-----------|----------|-------|
-| Neural | `fever_pipeline_neural` | — | — | — | Pending |
-| CEGIS | `fever_pipeline_nst_cegis` | — | — | — | Pending |
+*CSR = Constraint Satisfaction Rate (fraction of predictions satisfying carry rule)*
 
 ---
 
-## Ablations
+## Kinship Relational Reasoning
 
-### Constraint Ablation (ECCG mode, Setting A)
+**Model**: Transformer encoder (2 layers, 128-dim, 4 heads)  
+**Task**: kinship relation classification from chain premises  
+**Compositional split**: train depth 1–3, test depth 4–6  
 
-| Constraints | Label Acc | ECE ↓ | Δ vs full |
-|-------------|-----------|-------|-----------|
-| All 5 (C1–C5) | — | — | — |
-| No C4 (entity overlap) | — | — | — |
-| No C5 (empty evidence) | — | — | — |
-| No C1+C2 (date+number) | — | — | — |
-| None (= neural) | — | — | — |
+### Full Runs
 
-### Multi-Seed (mean ± std, n=3)
-
-| Mode | Label Acc | ECE ↓ | Seeds |
-|------|-----------|-------|-------|
-| Neural | — | — | 42, 1337, 2024 |
-| ECCG | — | — | 42, 1337, 2024 |
+| Model | Acc (IID) | Acc (Comp) | CSR (Comp) | Comp Gap |
+|-------|-----------|------------|------------|----------|
+| Pure Neural | — | — | — | — |
+| NST-Lagrangian | — | — | — | — |
+| **NST-CEGIS** | — | — | — | — |
 
 ---
 
-## Key Fixes Applied (fever-sota branch)
+## FEVER Fact Verification
 
-1. **Tokenization fix:** `fever_collate_fn` now uses proper sentence-pair encoding
-   (`tokenizer(claim, evidence)`) instead of literal `" [SEP] "` concatenation.
-   DeBERTa-v3 uses `</s>` as separator, not `[SEP]`.
+**Model**: DeBERTa-v3-base (184M) / DeBERTa-v3-large (405M) with LoRA  
+**Task**: SUPPORTS / REFUTES / NOT ENOUGH INFO classification  
+**Wiki cache**: 14,363 pages (~98.8% coverage)  
+**Seeds**: {42, 43, 44}  
+**Key fix**: max_length=384 for all configs (previously 256 for some — evidence was truncated)
 
-2. **Full reproducibility:** numpy + torch + DataLoader seeds, `cudnn.deterministic=True`,
-   `cudnn.benchmark=False`.
+### Available Training Modes
 
-3. **Step-level evaluation:** `eval_every_steps` now evaluates at actual step intervals
-   (not epoch-level), with proper early stopping.
+| Mode | Description | Config |
+|------|-------------|--------|
+| Neural | Pure DeBERTa NLI (no symbolic) | `fever_gold_neural.yaml` |
+| Soft | Fixed-weight symbolic constraints (v1) | `fever_gold_nst_soft.yaml` |
+| Lagrangian | Adaptive λ dual-variable constraints | `fever_gold_lagrangian.yaml` |
+| CEGIS | Counterexample-guided refinement | `fever_gold_nst_cegis.yaml` |
+| ECCG/Gated | Per-sample constraint gating | `fever_gold_nst_gated.yaml` |
+| **VERI** | **3-phase verification-enhanced (flagship)** | `fever_gold_nst_veri_a100.yaml` |
 
-4. **Dev/dev_test split:** `dev_test_ratio: 0.1` holds out 10% of labelled_dev for
-   final evaluation, preventing overfitting through repeated dev evaluation.
+### Smoke Tests
 
-5. **FEVER Score metric:** Official shared-task scoring (label correct AND sufficient
-   evidence) for pipeline mode.
+| Config | Model | Train | Dev | Epochs | dev_acc | Runtime |
+|--------|-------|-------|-----|--------|---------|---------|
+| `fever_micro_smoke` | BERT-tiny (4.4M) | 50 | 25 | 2 | ~0.28 | <30s CPU |
+| `fever_gold_smoke` | DeBERTa-v3-base | 200 | 100 | 1 | ~0.32 | ~30s GPU |
+| `fever_veri_smoke` | DeBERTa-v3-base+VERI | 200 | 100 | 3 | — | ~2 min CPU |
 
-6. **Wiki cache:** Full 14,363-page SQLite cache (98.8% coverage of referenced pages).
+### Setting A: Gold Evidence
 
-7. **BM25 improvement:** Stopword removal + minimum token length for better retrieval.
+| Mode | Config | Label Acc | ECE ↓ | Brier ↓ | Notes |
+|------|--------|-----------|-------|---------|-------|
+| Neural | `fever_gold_neural` | — | — | — | Baseline |
+| Soft (λ=0.1) | `fever_gold_nst_soft` | — | — | — | Fixed constraint weight |
+| Lagrangian | `fever_gold_lagrangian` | — | — | — | Adaptive λ |
+| CEGIS | `fever_gold_nst_cegis` | — | — | — | Counterexample-guided |
+| ECCG | `fever_gold_nst_gated` | — | — | — | Per-sample gating |
+| **NST-VERI** | `fever_gold_nst_veri_a100` | — | — | — | **3-phase: NLI→contrastive→constraints** |
 
-8. **DeBERTa-v3 tokenizer:** Explicit `DebertaV2Tokenizer` (slow) to avoid
-   tiktoken/protobuf conversion failures in transformers 4.46.x.
+### Setting B: Retrieved Evidence (Full Pipeline)
+
+| Mode | Config | FEVER Score | Label Acc | Recall@5 |
+|------|--------|-------------|-----------|----------|
+| Neural | `fever_pipeline_neural` | — | — | — |
+| CEGIS | `fever_pipeline_nst_cegis` | — | — | — |
+
+### NST-VERI Architecture
+
+The flagship model combines:
+1. **DeBERTa-v3-large backbone** with LoRA (r=16, α=32) — efficient fine-tuning
+2. **K=6 verification heads** — auxiliary binary classifiers bridging neural→symbolic
+3. **Residual correction** — zero-init logit adjustment from verification signals
+4. **Supervised contrastive head** — representation shaping via class prototypes
+5. **Adaptive per-sample λ** — learns when to trust constraints per example
+6. **Focal loss** — focuses training on hard REFUTES/NEI boundary cases
+7. **Constraint engine v2** — 6 probabilistic constraints (numerical, negation, entity overlap, sufficiency, temporal, hedge)
+
+Training proceeds in 3 phases:
+- **Phase 1** (20% of epochs): NLI + auxiliary heads only
+- **Phase 2** (20%): + contrastive loss on high-confidence constraint examples
+- **Phase 3** (60%): + adaptive constraint loss with curriculum warmup
+
+---
+
+## Quick Start
+
+```bash
+# Smoke test (verify pipeline works)
+python main.py train-fever-veri --config configs/fever_veri_smoke.yaml
+
+# Rapid development (10K subset, ~15 min GPU)
+python main.py train-fever-nst --config configs/fever_rapid_10k.yaml
+
+# Full NST-VERI on A100
+python main.py train-fever-veri --config configs/fever_gold_nst_veri_a100.yaml
+
+# Evaluate checkpoint
+python eval/fever.py --ckpt outputs_fever_gold_nst_veri/ckpt --model_type veri
+```
 
 ---
 
@@ -98,5 +140,7 @@ Gold evidence **NEVER** accessed. Measures end-to-end performance.
 - Split hashes logged in every `report.json`
 - Leakage guard enforced in `FeverPipelineDataset`
 - CEGIS mines counterexamples from training set only
-- Test set never touched
-- All 193 unit tests pass
+- Test set never touched during training or hyperparameter selection
+- 232+ unit tests pass (`pytest tests/`)
+- All configs use max_length=384 (no evidence truncation)
+- Post-hoc temperature scaling for calibration (learned on dev set)

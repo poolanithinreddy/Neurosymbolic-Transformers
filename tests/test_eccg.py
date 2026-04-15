@@ -282,18 +282,23 @@ class TestClassWeights:
         assert weights[0] < weights[2]
 
     def test_fever_nli_wrapper_accepts_class_weights(self):
-        from transformers import AutoConfig, AutoModelForSequenceClassification
+        from transformers import DebertaV2Config, DebertaV2ForSequenceClassification
         from models.fever_nli import FeverNLIWrapper
 
-        config = AutoConfig.from_pretrained(
-            "hf-internal-testing/tiny-random-deberta-v2",
+        config = DebertaV2Config(
+            vocab_size=128,
+            hidden_size=32,
+            num_hidden_layers=1,
+            num_attention_heads=2,
+            intermediate_size=64,
             num_labels=3,
+            max_position_embeddings=64,
+            relative_attention=False,
         )
-        base = AutoModelForSequenceClassification.from_config(config)
+        base = DebertaV2ForSequenceClassification(config)
         weights = torch.tensor([1.0, 2.0, 1.5])
         wrapper = FeverNLIWrapper(base, class_weights=weights)
 
-        # Should run without error
         input_ids = torch.randint(0, 100, (2, 8))
         mask = torch.ones(2, 8, dtype=torch.long)
         labels = torch.tensor([0, 1])

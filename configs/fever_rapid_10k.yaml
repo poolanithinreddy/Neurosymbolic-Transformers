@@ -1,0 +1,41 @@
+# FEVER Gold Evidence — Rapid Development Config (10K subset)
+# Purpose: Fast iteration — full pipeline in ~15-20 min on a single GPU
+# Use this for development, debugging, and quick sanity checks
+
+mode: "neural"
+device: "auto"
+seed: 42
+
+task: "fever"
+evidence_mode: "gold"
+
+io:
+  out_dir: "outputs_fever_rapid_10k"
+
+model:
+  name: "microsoft/deberta-v3-base"
+  num_labels: 3
+  label_smoothing: 0.05
+  dropout: 0.1
+  max_length: 384
+  use_lora: false
+  gradient_checkpointing: false
+
+data:
+  max_train: 10000
+  max_dev: 2000
+  dev_test_ratio: 0.1
+  dev_sample: 500
+
+train:
+  epochs: 3
+  batch_size: 16
+  grad_accum_steps: 1
+  lr: 2.0e-5
+  warmup_ratio: 0.06
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  fp16: true
+  eval_every_steps: 200
+  patience: 5
+  num_workers: 2

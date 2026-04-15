@@ -17,7 +17,7 @@ model:
   num_labels: 3
   label_smoothing: 0.05
   dropout: 0.1
-  max_length: 256
+  max_length: 384
 
 data:
   max_train: null

@@ -80,8 +80,8 @@ def cmd_train_fever_nst(args):
 
 def cmd_train_fever_veri(args):
     """Train NST-VERI: flagship neurosymbolic method."""
-    from training.train_nst_veri import train_nst_veri
-    train_nst_veri(args.config, outdir_override=args.outdir)
+    from training.train_fever_veri import train_fever_veri
+    train_fever_veri(args.config, outdir_override=args.outdir)
 
 
 def cmd_pretrain_mnli(args):

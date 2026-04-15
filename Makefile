@@ -14,17 +14,16 @@ fmt:
 
 lint:
 	ruff check .
-	mypy nst || true
+	mypy models training symbolic eval logic || true
 
 test:
-	pytest -q --cov=nst
+	TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1 pytest -q
 
 smoke:
-	$(PY) training/train.py --config configs/mac_quick.yaml --task fever --outdir outputs_quick
-	$(PY) eval/fever.py --ckpt outputs_quick/ckpt --data data/fever.tsv --split dev --report outputs_quick/fever_dev.json --device cpu
+	bash scripts/smoke_test.sh
 
 colab:
-	@echo "Run the cells in colab/colab_commands.md inside Colab."
+	@echo "See colab/README_COLAB.md for copy-paste Colab instructions."
 
 # ── Paper experiment targets ──────────────────────────────────
 

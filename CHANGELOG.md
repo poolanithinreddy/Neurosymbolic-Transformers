@@ -1,15 +1,29 @@
 # Changelog
 
-## 0.1.0 (2025-10-21)
+## 0.1.0
 
-- Packaging via pyproject with dev extras
-- Pre-commit hooks (ruff, black, mypy)
-- Device auto-selection; outdir override
-- FEVER quick path (train/eval) with hard mask decoding
-- TruthfulQA TSV generator and evaluator (simple truthfulness)
-- COGS placeholder TSVs and evaluator (EM/F1)
-- Makefile targets (setup/fmt/lint/test/smoke)
-- CI workflow (format, lint, test)
-- Colab helper scripts
-- Data schemas documented
-- Apache-2.0 license
+### Core features
+- Neural CEGIS training loop with augmented Lagrangian (adaptive λ)
+- Evidence-Conditioned Constraint Gating (ECCG) for FEVER
+- Multi-digit addition benchmark with carry-propagation constraints
+- Kinship relational reasoning benchmark with compositional depth split
+- FEVER fact verification pipeline (Setting A: gold evidence, Setting B: BM25 retrieval)
+- Controlled baselines: random replay, hard-example mining, same-budget training
+- Multi-seed runner for mean ± std results
+- Inference latency benchmark, alignment phase plots, LaTeX/Markdown table export
+- One-click Colab playbooks (nst_playbook.py, fever_playbook.py)
+- 232-test unit test suite
+
+### Infrastructure
+- `pyproject.toml` with proper package discovery and editable install
+- `pytest` with `importmode = importlib` and `pythonpath = ["."]`
+- `scripts/smoke_test.sh` — full stack verification in <60s, no GPU required
+- `configs/multi_digit_smoke.yaml` — CPU smoke config (200 samples, 2 epochs)
+- `Makefile` targets: setup, test, smoke, experiments, baselines, latency, plots, tables
+- CI workflow (GitHub Actions, ubuntu-latest, Python 3.11)
+
+### Bug fixes
+- Fixed YAML float parsing (1e-3 was parsed as string, causing TypeError in AdamW)
+- Fixed editable install: pyproject.toml package discovery now finds all actual packages
+- Fixed pytest: added importmode=importlib to avoid root __init__.py collision
+- Fixed test_fever.py and test_eccg.py: removed HuggingFace network dependency from fixtures

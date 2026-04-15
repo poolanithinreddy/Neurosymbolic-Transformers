@@ -1,0 +1,28 @@
+# Multi-digit smoke test — runs in <30s on CPU, no GPU required
+# Run: python main.py train-multi-digit --config configs/multi_digit_smoke.yaml
+#
+# This is a sanity check, not a serious training run.
+# Expected: completes without error, outputs a report.json.
+
+model:
+  mode: lagrangian
+
+data:
+  n_train: 200
+  n_test: 100
+  img_size: 14
+
+training:
+  epochs: 2
+  lr: 1e-3
+  batch_size: 32
+  device: cpu
+  seed: 42
+  outdir: outputs_smoke_multi_digit
+
+logic:
+  lambda_init: 0.0
+  epsilon: 0.1
+  alpha: 0.01
+  rho: 0.5
+  lambda_max: 5.0

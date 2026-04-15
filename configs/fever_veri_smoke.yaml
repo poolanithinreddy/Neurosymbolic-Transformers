@@ -1,0 +1,52 @@
+# FEVER Gold Evidence — NST-VERI Smoke Test
+# Purpose: Verify the full 3-phase pipeline runs end-to-end
+# Expected: ~2 min on CPU, ~30s on GPU. Accuracy will be low (tiny data).
+
+mode: "veri"
+device: "auto"
+seed: 42
+
+task: "fever"
+evidence_mode: "gold"
+
+io:
+  out_dir: "outputs_fever_veri_smoke"
+
+model:
+  name: "microsoft/deberta-v3-base"
+  num_labels: 3
+  label_smoothing: 0.05
+  dropout: 0.1
+  max_length: 128
+  use_lora: false
+  gradient_checkpointing: false
+
+data:
+  max_train: 200
+  max_dev: 100
+  dev_test_ratio: 0.1
+  dev_sample: 50
+
+train:
+  epochs: 3
+  batch_size: 8
+  grad_accum_steps: 1
+  lr: 2.0e-5
+  lr_lora: 3.0e-4
+  lr_heads: 5.0e-4
+  lr_gate: 1.0e-3
+  warmup_ratio: 0.1
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  fp16: false
+  bf16: false
+  eval_every_steps: 10
+  patience: 20
+  num_workers: 0
+
+veri:
+  n_constraints: 6
+  lambda_max: 0.3
+  contrastive_temperature: 0.07
+  beta_aux: 1.0
+  gamma_contrastive: 0.1

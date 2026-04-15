@@ -1,6 +1,6 @@
-"""NST: Neurosymbolic Transformers.
+"""NST: Neuro-Symbolic Transformers.
 
-Differentiable first-order logic with R-CBM predicate heads for training and decoding.
+Neural CEGIS — counterexample-guided training with augmented Lagrangian constraints.
 """
 
 __all__ = ["__version__"]
