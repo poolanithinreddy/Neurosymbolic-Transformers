@@ -83,14 +83,36 @@
 
 ### Setting A: Gold Evidence
 
-| Mode | Config | Label Acc | ECE ↓ | Brier ↓ | Notes |
-|------|--------|-----------|-------|---------|-------|
-| Neural | `fever_gold_neural` | — | — | — | Baseline |
-| Soft (λ=0.1) | `fever_gold_nst_soft` | — | — | — | Fixed constraint weight |
-| Lagrangian | `fever_gold_lagrangian` | — | — | — | Adaptive λ |
-| CEGIS | `fever_gold_nst_cegis` | — | — | — | Counterexample-guided |
-| ECCG | `fever_gold_nst_gated` | — | — | — | Per-sample gating |
-| **NST-VERI** | `fever_gold_nst_veri_a100` | — | — | — | **3-phase: NLI→contrastive→constraints** |
+> **Run date**: 2026-04-16, A100-SXM4-40GB, seed=42
+> Evidence: SQLite wiki cache (14,363 pages), 53% of claims have >30 char evidence text
+
+| Mode | Config | Label Acc | ECE ↓ | Brier ↓ | DevTest | Time | Notes |
+|------|--------|-----------|-------|---------|---------|------|-------|
+| Neural | `fever_gold_neural` | **0.8378** | **0.0401** | **0.2395** | **0.8350** | 38m | DeBERTa-v3-base, 184M, full FT |
+| **NST-VERI** | `fever_gold_nst_veri` | 0.8384 | 0.0423 | 0.2369 | 0.8320 | 124m | DeBERTa-v3-large+LoRA, 9.5M/445M |
+| Soft (λ=0.1) | `fever_gold_nst_soft` | — | — | — | — | — | Fixed constraint weight |
+| Lagrangian | `fever_gold_lagrangian` | — | — | — | — | — | Adaptive λ |
+| CEGIS | `fever_gold_nst_cegis` | — | — | — | — | — | Counterexample-guided |
+| ECCG | `fever_gold_nst_gated` | — | — | — | — | — | Per-sample gating |
+
+**Per-label breakdown (dev):**
+
+| Mode | SUPPORTS | REFUTES | NOT ENOUGH INFO |
+|------|----------|---------|-----------------|
+| Neural | 0.8670 (n=6014) | 0.8202 (n=5969) | 0.8259 (n=6015) |
+| NST-VERI | 0.8964 (n=6014) | 0.7953 (n=5969) | 0.8231 (n=6015) |
+
+**Honest assessment:**
+- **NST-VERI and Neural Baseline are effectively tied** on overall accuracy (+0.06%, within noise)
+- NST-VERI has better SUPPORTS accuracy (+2.9%) but worse REFUTES (-2.5%)
+- Brier score favors VERI slightly (0.2369 vs 0.2395) but ECE is slightly worse
+- **Critical bug found**: constraint loss (`cst`) was always 0.0 — constraints never activated
+  - Root cause: `_constraint_warmup(epoch=2, epochs=5)` returned 0.0 at Phase 3 start
+  - Early stopping (patience=6) fired at step 5000 before constraints ramped up
+  - **Fix applied**: warmup now starts at non-zero from Phase 3 start; patience increased to 10
+- NST-VERI used a larger model (DeBERTa-v3-large 405M vs base 184M) yet didn't outperform
+- Result represents **the neural backbone's contribution, not symbolic constraints**
+- Single seed, no variance estimate — results are directional, not definitive
 
 ### Setting B: Retrieved Evidence (Full Pipeline)
 

@@ -50,7 +50,7 @@ train:
   fused_optimizer: true
   eval_every_steps: 250
   eval_strategy: "steps"
-  patience: 6
+  patience: 10                  # Generous: allow constraints to ramp up in Phase 3
   num_workers: 4
 
 # NST-VERI specific settings

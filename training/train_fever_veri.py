@@ -223,17 +223,22 @@ def _constraint_warmup(epoch: int, total_epochs: int) -> float:
     """Constraint weight warmup schedule for Phase 3.
 
     Returns multiplier in [0, 1] that ramps up constraint influence.
-    This prevents early constraint interference when the model
-    hasn't learned basic NLI yet.
+    Uses (epoch - start + 1) so constraints are non-zero from the
+    first epoch of Phase 3 (previously: zero at phase start, which
+    caused early stopping before constraints activated).
     """
     phase = _get_phase(epoch, total_epochs)
     if phase < 3:
         return 0.0
-    # Linear warmup within phase 3
+    # Linear warmup within phase 3, starting at a non-zero value
     phase3_start = int(0.4 * total_epochs)
     if total_epochs <= 2:
         phase3_start = 1
-    progress = (epoch - phase3_start) / max(1, total_epochs - phase3_start)
+    phase3_len = total_epochs - phase3_start
+    if phase3_len <= 0:
+        return 1.0
+    # +1 so the first epoch of phase 3 gets a non-zero multiplier
+    progress = (epoch - phase3_start + 1) / phase3_len
     return min(1.0, max(0.0, progress))
 
 
