@@ -1,0 +1,59 @@
+# FEVER Gold Evidence — NST-VERI Ablation: Fixed Lambda (no ECCG gating)
+# DeBERTa-v3-large + LoRA + full VERI but fixed constraint weights
+# Tests whether ECCG gating outperforms fixed-weight constraints
+
+mode: "veri"
+device: "auto"
+seed: 42
+
+task: "fever"
+evidence_mode: "gold"
+
+io:
+  out_dir: "outputs_ablation_fixed_lambda"
+
+model:
+  name: "microsoft/deberta-v3-large"
+  num_labels: 3
+  label_smoothing: 0.05
+  dropout: 0.1
+  max_length: 384
+  use_lora: true
+  lora_rank: 16
+  lora_alpha: 32
+  gradient_checkpointing: true
+
+data:
+  max_train: null
+  max_dev: null
+  dev_sample: 2000
+  dev_test_ratio: 0.1
+
+train:
+  epochs: 5
+  batch_size: 16
+  grad_accum_steps: 4
+  lr: 1.0e-5
+  lr_lora: 3.0e-4
+  lr_heads: 5.0e-4
+  lr_gate: 1.0e-3
+  warmup_ratio: 0.06
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  bf16: true
+  fp16: false
+  fused_optimizer: true
+  eval_every_steps: 250
+  eval_strategy: "steps"
+  patience: 10
+  num_workers: 4
+
+veri:
+  n_constraints: 6
+  lambda_max: 0.3
+  contrastive_temperature: 0.07
+  use_adaptive_lambda: false   # KEY: fixed lambda, no ECCG gating
+
+logic:
+  lambda: 0.0
+  constraint_weights: null

@@ -1,11 +1,11 @@
 # NST Results Tracker
 
-> **Status**: Full training pipeline operational. NST-VERI flagship method now wired.
-> Run `python main.py train-fever-veri --config configs/fever_gold_nst_veri_a100.yaml` for full results.
+> **Status**: Full training pipeline operational. GroundedVerifier API available.
+> NST-VERI constraint warmup bug found and fixed. Fair comparison configs added.
 >
 > **Honesty policy**: All reported numbers are from actual training runs.
 > Placeholders marked with "—" have not been measured yet.
-> If the real result is 84%, we report 84%.
+> If the real result is 84%, we report 84%. Negative results are reported too.
 
 ---
 
@@ -88,12 +88,13 @@
 
 | Mode | Config | Label Acc | ECE ↓ | Brier ↓ | DevTest | Time | Notes |
 |------|--------|-----------|-------|---------|---------|------|-------|
-| Neural | `fever_gold_neural` | **0.8378** | **0.0401** | **0.2395** | **0.8350** | 38m | DeBERTa-v3-base, 184M, full FT |
-| **NST-VERI** | `fever_gold_nst_veri` | 0.8384 | 0.0423 | 0.2369 | 0.8320 | 124m | DeBERTa-v3-large+LoRA, 9.5M/445M |
-| Soft (λ=0.1) | `fever_gold_nst_soft` | — | — | — | — | — | Fixed constraint weight |
-| Lagrangian | `fever_gold_lagrangian` | — | — | — | — | — | Adaptive λ |
-| CEGIS | `fever_gold_nst_cegis` | — | — | — | — | — | Counterexample-guided |
-| ECCG | `fever_gold_nst_gated` | — | — | — | — | — | Per-sample gating |
+| Neural (base) | `fever_gold_neural` | **0.8378** | **0.0401** | **0.2395** | **0.8350** | 38m | DeBERTa-v3-base, 184M, full FT |
+| Neural (large) | `fever_gold_neural_large` | — | — | — | — | — | DeBERTa-v3-large+LoRA, **fair baseline** |
+| NST-VERI v1 | `fever_gold_nst_veri` | 0.8384 | 0.0423 | 0.2369 | 0.8320 | 124m | **Bug: constraints never fired** |
+| **NST-VERI v2** | `fever_gold_nst_veri` | — | — | — | — | — | **Fixed warmup, patience=10** |
+| Ablation: no cst | `ablation_no_constraints` | — | — | — | — | — | VERI without Phase 3 constraints |
+| Ablation: fixed λ | `ablation_fixed_lambda` | — | — | — | — | — | VERI without ECCG gating |
+| Ablation: no ctr | `ablation_no_contrastive` | — | — | — | — | — | VERI without Phase 2 contrastive |
 
 **Per-label breakdown (dev):**
 
@@ -166,3 +167,37 @@ python eval/fever.py --ckpt outputs_fever_gold_nst_veri/ckpt --model_type veri
 - 232+ unit tests pass (`pytest tests/`)
 - All configs use max_length=384 (no evidence truncation)
 - Post-hoc temperature scaling for calibration (learned on dev set)
+
+---
+
+## GroundedVerifier API
+
+The reusable verification layer — the engineering artifact of this project.
+
+```python
+from nst import GroundedVerifier
+
+verifier = GroundedVerifier(model_name="microsoft/deberta-v3-base")
+result = verifier.verify("Paris is the capital of France",
+                          "Paris is the capital city of France.")
+print(result.label, result.confidence, result.abstain)
+# result.constraint_details shows per-constraint diagnostics
+```
+
+**Features:**
+- Wraps any HuggingFace NLI model
+- 6 probabilistic constraints (ConstraintEngineV2)
+- ECCG per-sample gating (465 params)
+- Calibrated abstention on insufficient evidence
+- Latency benchmarking (`verifier.benchmark_latency()`)
+- Save/load serialization
+
+---
+
+## Key Questions (Experimental Agenda)
+
+1. **Does the constraint warmup fix actually make constraints fire?** (NST-VERI v2)
+2. **Does VERI beat neural when using the SAME backbone?** (Neural-Large vs VERI v2)
+3. **Which components matter?** (ablation: ±constraints, ±contrastive, ±ECCG)
+4. **What is the latency overhead of symbolic verification?** (GroundedVerifier benchmark)
+5. **Do constraints improve calibration even if accuracy is tied?** (ECE, Brier comparison)

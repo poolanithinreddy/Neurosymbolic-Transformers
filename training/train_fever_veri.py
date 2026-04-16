@@ -331,6 +331,13 @@ def train_fever_veri(
     contrastive_temp = float(veri_cfg.get("contrastive_temperature", 0.07))
     beta = float(veri_cfg.get("beta_aux", 1.0))
     gamma = float(veri_cfg.get("gamma_contrastive", 0.1))
+    use_adaptive_lambda = veri_cfg.get("use_adaptive_lambda", True)
+    skip_contrastive = veri_cfg.get("skip_contrastive", False)
+    if skip_contrastive:
+        gamma = 0.0
+        logger.info("Ablation: contrastive loss SKIPPED (gamma=0)")
+    if not use_adaptive_lambda:
+        logger.info("Ablation: using FIXED lambda (no ECCG gating)")
 
     # ── Performance tuning ────────────────────────────────────
     if enable_tf32 and device == "cuda":
@@ -578,11 +585,22 @@ def train_fever_veri(
                 # Compute adaptive lambda if in phase 3
                 adaptive_out = None
                 if phase >= 3 and sched_mult > 0:
-                    probs = result["probs"].detach()  # Detach to prevent double backprop
-                    adaptive_out = adaptive_lambda_mod(
-                        fires, confidence, probs,
-                        schedule_multiplier=sched_mult,
-                    )
+                    B_cur = fires.shape[0]
+                    K_cur = fires.shape[1]
+                    if use_adaptive_lambda:
+                        probs = result["probs"].detach()
+                        adaptive_out = adaptive_lambda_mod(
+                            fires, confidence, probs,
+                            schedule_multiplier=sched_mult,
+                        )
+                    else:
+                        # Fixed lambda: uniform weight, no learned gating
+                        adaptive_out = {
+                            "lambda_per_sample": torch.full(
+                                (B_cur,), lambda_max * sched_mult, device=device,
+                            ),
+                            "gate_weights": torch.ones(B_cur, K_cur, device=device),
+                        }
                     # Recompute forward with constraint loss
                     result = model(
                         input_ids, attention_mask, labels,

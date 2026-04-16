@@ -25,6 +25,32 @@ The result: a training regime where constraint satisfaction improves monotonical
 3. **Evidence-Conditioned Constraint Gating (ECCG)** — per-sample, per-constraint reliability gates that learn when noisy symbolic extractors are informative.
 4. **Three benchmarks**: multi-digit addition with carry propagation, kinship reasoning with distractors, and FEVER fact verification.
 5. **Controlled baselines**: random replay, hard-example mining, and same-budget training isolate the effect of constraint-targeted counterexamples.
+6. **GroundedVerifier API** — a reusable, pip-installable verification layer that wraps any NLI model with symbolic constraints and ECCG gating.
+
+---
+
+## GroundedVerifier — Quick Start
+
+```python
+from nst import GroundedVerifier
+
+# Wrap any HuggingFace NLI model with symbolic verification
+verifier = GroundedVerifier(model_name="microsoft/deberta-v3-base")
+
+result = verifier.verify(
+    claim="The Eiffel Tower is 500 meters tall.",
+    evidence="The Eiffel Tower is 330 metres tall.",
+)
+
+print(result.label)          # "REFUTES"
+print(result.confidence)     # 0.87
+print(result.abstain)        # False
+print(result.constraint_details)  # Per-constraint diagnostics
+
+# Latency benchmark
+bench = verifier.benchmark_latency()
+print(f"P95: {bench['p95_ms']:.1f} ms, constraint overhead: {bench['overhead_constraints_pct']:.1f}%")
+```
 
 ---
 
