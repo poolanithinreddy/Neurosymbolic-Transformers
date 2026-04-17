@@ -1,11 +1,11 @@
 [project]
 name = "nst"
-version = "0.1.0"
+version = "0.3.0"
 description = "Neurosymbolic Transformers (NST): counterexample-guided training with augmented Lagrangian constraints"
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
 license = "Apache-2.0"
-authors = [{ name = "NST Authors" }]
+authors = [{ name = "Nithin Reddy Poola", email = "poolanithinreddy@gmail.com" }]
 dependencies = [
   "torch>=2.2.0",
   "transformers>=4.40.0",
@@ -75,8 +75,8 @@ include = [
   "decoding*",
   "grounding*",
   "retrieval*",
-  "results*",
   "data*",
+  "scripts*",
 ]
 exclude = [
   "tests*",

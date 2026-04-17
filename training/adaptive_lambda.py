@@ -43,7 +43,7 @@ class AdaptiveLambdaModule(nn.Module):
 
     def __init__(
         self,
-        n_constraints: int = 6,
+        n_constraints: int = 7,
         hidden_dim: int = 64,
         lambda_max: float = 0.5,
     ):

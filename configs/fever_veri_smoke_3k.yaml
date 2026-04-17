@@ -53,6 +53,6 @@ train:
   focal_gamma: 2.0
 
 veri:
-  n_constraints: 6
+  n_constraints: 7
   lambda_max: 2.0              # Strong constraint signal
   contrastive_temperature: 0.07

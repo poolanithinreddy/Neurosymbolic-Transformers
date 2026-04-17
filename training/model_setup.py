@@ -186,7 +186,7 @@ def build_nst_veri_model(
     num_labels: int = NUM_LABELS,
     label_smoothing: float = 0.05,
     dropout: float = 0.1,
-    n_constraints: int = 6,
+    n_constraints: int = 7,
     use_lora: bool = True,
     lora_rank: int = 16,
     lora_alpha: int = 32,

@@ -55,7 +55,7 @@ train:
   num_workers: 4
 
 veri:
-  n_constraints: 6
+  n_constraints: 7
   lambda_max: 1.5
   contrastive_temperature: 0.07
   beta_aux: 1.0

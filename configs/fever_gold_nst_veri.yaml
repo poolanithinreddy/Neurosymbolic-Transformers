@@ -57,7 +57,7 @@ train:
 
 # NST-VERI specific settings
 veri:
-  n_constraints: 6             # 6 probabilistic constraints
+  n_constraints: 7             # 7 probabilistic constraints (v2.1)
   lambda_max: 2.0              # Strong constraint weight (was 0.3 — too weak)
   contrastive_temperature: 0.07
 

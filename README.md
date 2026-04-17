@@ -98,7 +98,7 @@ nst/
 ├── eval/                   # Evaluation, calibration metrics, rule satisfaction, leakage checks
 ├── scripts/                # Benchmark, plots, table export, cleanup, smoke test
 ├── results/                # Results aggregation (LaTeX/Markdown table generation)
-├── tests/                  # 232 unit tests
+├── tests/                  # 233 unit tests
 ├── colab/                  # One-click Colab playbooks
 ├── PAPER.md                # Technical write-up
 ├── RUNBOOK.md              # FEVER experiment playbook
@@ -171,7 +171,7 @@ What it checks:
 1. Python version ≥ 3.10
 2. Core package imports (torch, transformers, all NST modules)
 3. Dataset statistics generation
-4. Full unit test suite (232 tests)
+4. Full unit test suite (233 tests)
 5. Multi-digit smoke training (200 samples, 2 epochs, CPU, ~2s)
 6. Inference latency benchmark (50 samples, CPU)
 
@@ -243,6 +243,8 @@ make all-paper        # everything above
 | `fever_gold_nst_soft.yaml` | Soft constraints (fixed λ) | FEVER (Gold Evidence) |
 | `fever_gold_nst_cegis.yaml` | **Neural CEGIS** | FEVER (Gold Evidence) |
 | `fever_gold_nst_gated.yaml` | **ECCG** (gated constraints) | FEVER (Gold Evidence) |
+| `fever_gold_nst_veri.yaml` | **NST-VERI** (verification-enhanced) | FEVER (Gold Evidence) |
+| `fever_gold_nst_veri_a100.yaml` | **NST-VERI** (A100 optimized) | FEVER (Gold Evidence) |
 | `fever_gold_smoke.yaml` | Smoke test (200 samples) | FEVER (Gold Evidence) |
 | `fever_micro_smoke.yaml` | Micro smoke (50 samples, tiny BERT) | FEVER |
 | `fever_pipeline_neural.yaml` | Pure neural baseline | FEVER (Full Pipeline) |
@@ -258,12 +260,20 @@ NST applies Neural CEGIS to the FEVER fact verification task, classifying claim�
 - **Setting A (Gold Evidence)**: oracle evidence → Label Accuracy. Isolates NLI capability.
 - **Setting B (Full Pipeline)**: BM25 retrieval → NLI → FEVER Score. End-to-end pipeline.
 
-**Architecture**: DeBERTa-v3-base (184M params) with 5 differentiable constraints:
-- C1: Date contradiction → ¬SUPPORTS
-- C2: Number contradiction → ¬SUPPORTS
-- C3: Negation mismatch → ¬SUPPORTS
-- C4: Low entity overlap → NEI
-- C5: Empty evidence → NEI
+**Architecture**: DeBERTa-v3-large (442M params, 7.1M trainable via LoRA r=16) with 7 probabilistic constraints + ECCG gating:
+- C1: Numerical discrepancy (shared-entity + quantity-context aware matching)
+- C2: Negation mismatch (shared content requirement + antonym pairs + polarity analysis)
+- C3: Entity overlap → NEI bias (dual-metric: entity + content word overlap)
+- C4: Evidence sufficiency → NEI bias (empty/short evidence)
+- C5: Temporal inconsistency (year/date mismatch with shared entity requirement)
+- C6: Hedge/modality mismatch (speculative claim vs. definitive evidence)
+- C7: Mutual exclusion (categorical "X is Y" vs "X is Z" conflicts)
+
+**NST-VERI training**: 3-phase protocol with uncertainty-focused constraint integration:
+- Phase 1 (epoch 0): NLI + aux heads + light constraints (5% weight)
+- Phase 2 (epoch 1): + contrastive loss + moderate constraints (20%)
+- Phase 3 (epochs 2+): constraint warmup 40% → 100%
+- Uncertainty-focused constraint loss: constraints primarily influence gradient when the model is **uncertain** AND the constraint **disagrees** with the model's prediction
 
 ```bash
 # Build wiki cache (one-time, ~4 min, ~25 MB SQLite)
@@ -292,7 +302,7 @@ python main.py eval-fever --ckpt outputs_fever_gold_neural/ckpt/best_model.pt
 | Hardware | Colab T4 (16 GB VRAM) or macOS with MPS |
 | Seeds | {42, 43, 44} — results reported as mean ± std |
 | Framework | PyTorch ≥ 2.2, Python ≥ 3.10 |
-| Tests | 232 tests, `pytest tests/ -v` |
+| Tests | 233 tests, `pytest tests/ -v` |
 | License | Apache-2.0 |
 
 ---

@@ -92,6 +92,7 @@
 | Neural (large) | `fever_gold_neural_large` | — | — | — | — | — | DeBERTa-v3-large+LoRA, **fair baseline** |
 | NST-VERI v1 | `fever_gold_nst_veri` | 0.8384 | 0.0423 | 0.2369 | 0.8320 | 124m | **Bug: constraints never fired** |
 | **NST-VERI v2** | `fever_gold_nst_veri` | — | — | — | — | — | **Fixed warmup, patience=10** |
+| **NST-VERI v3** | `fever_gold_nst_veri` | — | — | — | — | — | **7 constraints, uncertainty-focused loss** |
 | Ablation: no cst | `ablation_no_constraints` | — | — | — | — | — | VERI without Phase 3 constraints |
 | Ablation: fixed λ | `ablation_fixed_lambda` | — | — | — | — | — | VERI without ECCG gating |
 | Ablation: no ctr | `ablation_no_contrastive` | — | — | — | — | — | VERI without Phase 2 contrastive |
@@ -126,17 +127,24 @@
 
 The flagship model combines:
 1. **DeBERTa-v3-large backbone** with LoRA (r=16, α=32) — efficient fine-tuning
-2. **K=6 verification heads** — auxiliary binary classifiers bridging neural→symbolic
+2. **K=7 verification heads** — auxiliary binary classifiers bridging neural→symbolic
 3. **Residual correction** — zero-init logit adjustment from verification signals
 4. **Supervised contrastive head** — representation shaping via class prototypes
 5. **Adaptive per-sample λ** — learns when to trust constraints per example
 6. **Focal loss** — focuses training on hard REFUTES/NEI boundary cases
-7. **Constraint engine v2** — 6 probabilistic constraints (numerical, negation, entity overlap, sufficiency, temporal, hedge)
+7. **Constraint engine v2.1** — 7 high-precision probabilistic constraints:
+   - C1: Numerical discrepancy (shared-entity + quantity-context aware)
+   - C2: Negation mismatch (shared content + antonym pairs)
+   - C3: Entity overlap (dual-metric: entity + content word overlap)
+   - C4: Evidence sufficiency (empty/short evidence → NEI)
+   - C5: Temporal inconsistency (year/date conflict with shared entities)
+   - C6: Hedge/modality (speculative vs. definitive language)
+   - C7: Mutual exclusion (categorical "X is Y" vs "X is Z" conflicts)
 
 Training proceeds in 3 phases:
 - **Phase 1** (20% of epochs): NLI + auxiliary heads only
-- **Phase 2** (20%): + contrastive loss on high-confidence constraint examples
-- **Phase 3** (60%): + adaptive constraint loss with curriculum warmup
+- **Phase 2** (20%): + contrastive loss on high-confidence examples
+- **Phase 3** (60%): + uncertainty-focused constraint loss with curriculum warmup
 
 ---
 
@@ -186,7 +194,7 @@ print(result.label, result.confidence, result.abstain)
 
 **Features:**
 - Wraps any HuggingFace NLI model
-- 6 probabilistic constraints (ConstraintEngineV2)
+- 7 high-precision probabilistic constraints (ConstraintEngineV2)
 - ECCG per-sample gating (465 params)
 - Calibrated abstention on insufficient evidence
 - Latency benchmarking (`verifier.benchmark_latency()`)

@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.3.0
+
+### Constraint engine overhaul (v2.1 — "precision > recall")
+- **NumericalConstraint**: requires shared entities + quantity context words ("total", "population", etc.) to fire; eliminates false positives from incidental number mentions
+- **NegationConstraint**: requires shared content words between claim and evidence; prevents false negation detection on unrelated sentences; uses strict antonym pairs
+- **EntityOverlapConstraint**: dual-metric approach combining entity overlap AND content word overlap; both must be low to fire, reducing false NEI bias
+- **TemporalConstraint**: requires shared entities between claim/evidence; prevents false temporal conflicts from unrelated time references
+- **HedgeModalityConstraint**: stricter thresholds (50%+ hedge words required) to avoid false positives on normal academic language
+- **NEW MutualExclusionConstraint** (C7): detects categorical assignment conflicts ("X is Y" vs "X is Z") — captures a pattern DeBERTa often misses
+
+### Training improvements
+- **Uncertainty-focused constraint loss**: constraints only influence the gradient when the model is *uncertain* (high entropy) AND the constraint *disagrees* with the prediction; avoids overriding confident correct predictions
+- **Gentler warmup schedule**: starts at 5% weight (was 10%), ramps gradually through training phases
+- Updated default `n_constraints` from 6 to 7 throughout model and config files
+
+### Packaging & docs
+- Synced version to 0.3.0 in both `pyproject.toml` and `__init__.py`
+- Updated author to Nithin Reddy Poola
+- Added fair neural-large baseline config (`fever_gold_neural_large.yaml`)
+- Updated README and RESULTS.md to reflect 7-constraint architecture
+- Added NST-VERI v3 row to results tracker
+
 ## 0.1.0
 
 ### Core features

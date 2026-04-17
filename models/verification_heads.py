@@ -46,7 +46,7 @@ class VerificationHeads(nn.Module):
     def __init__(
         self,
         hidden_dim: int,
-        n_constraints: int = 6,
+        n_constraints: int = 7,
         dropout: float = 0.1,
     ):
         super().__init__()

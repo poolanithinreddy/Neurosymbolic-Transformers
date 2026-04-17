@@ -220,24 +220,38 @@ def _get_phase(epoch: int, total_epochs: int) -> int:
 
 
 def _constraint_warmup(epoch: int, total_epochs: int) -> float:
-    """Constraint weight warmup schedule for Phase 3.
+    """Constraint weight warmup schedule.
 
     Returns multiplier in [0, 1] that ramps up constraint influence.
-    Starts at 0.5 on first constraint epoch, ramps to 1.0 linearly.
+
+    Design insight: constraints should be present from epoch 0 so the model
+    learns to use them BEFORE converging on pure NLI. But they must start
+    WEAK to avoid corrupting the initial representation with noisy signals.
+
+    Schedule:
+    - Epoch 0: 0.05 — very light, just enough to shape gradients
+    - Epoch 1: 0.15 — moderate, contrastive phase begins
+    - Epoch 2+: linear ramp 0.3 → 1.0 over remaining epochs
+
+    For short training (<=2 epochs): faster ramp.
     """
-    phase = _get_phase(epoch, total_epochs)
-    if phase < 3:
-        return 0.0
     if total_epochs <= 2:
-        phase3_start = 1
-    else:
-        phase3_start = 2  # Constraints start at epoch 2
+        if epoch == 0:
+            return 0.2
+        return 0.8
+    if total_epochs <= 3:
+        return [0.1, 0.4, 1.0][min(epoch, 2)]
+    if epoch == 0:
+        return 0.05
+    if epoch == 1:
+        return 0.15
+    # Phase 3: ramp 0.3 → 1.0
+    phase3_start = 2
     phase3_len = total_epochs - phase3_start
     if phase3_len <= 0:
         return 1.0
     progress = (epoch - phase3_start) / max(1, phase3_len - 1)
-    # Start at 0.5, ramp to 1.0
-    return min(1.0, 0.5 + 0.5 * progress)
+    return min(1.0, 0.3 + 0.7 * progress)
 
 
 def train_fever_veri(
@@ -324,7 +338,7 @@ def train_fever_veri(
 
     # VERI-specific config
     veri_cfg = cfg.get("veri", {})
-    n_constraints = int(veri_cfg.get("n_constraints", 6))
+    n_constraints = int(veri_cfg.get("n_constraints", 7))
     lambda_max = float(veri_cfg.get("lambda_max", 0.3))
     contrastive_temp = float(veri_cfg.get("contrastive_temperature", 0.07))
     beta = float(veri_cfg.get("beta_aux", 1.0))
@@ -594,6 +608,7 @@ def train_fever_veri(
         epoch_lambda_sum = 0.0
         epoch_lambda_count = 0
         epoch_gate_sum = None
+        epoch_disagree_fires = 0
         n_steps = 0
         optimizer.zero_grad()
 
@@ -624,7 +639,7 @@ def train_fever_veri(
 
                 # Compute adaptive lambda + constraint loss WITHOUT second forward pass
                 adaptive_out = None
-                if phase >= 3 and sched_mult > 0:
+                if sched_mult > 0:
                     B_cur = fires.shape[0]
                     K_cur = fires.shape[1]
                     if use_adaptive_lambda:
@@ -656,7 +671,19 @@ def train_fever_veri(
                     kl = (direction * (log_dir - log_probs_exp)).sum(dim=-1)  # (B, K)
                     kl = kl.clamp(max=10.0)  # Prevent huge gradients from bad constraints
 
-                    weighted_kl = kl * fires_f * confidence_t * gate_weights  # (B, K)
+                    # Uncertainty-focused constraint application:
+                    # 1) Only nudge where constraint DISAGREES with model
+                    # 2) Weight by model uncertainty — focus on uncertain samples
+                    #    where constraints add most value
+                    model_pred = probs_live.detach().argmax(dim=-1)  # (B,)
+                    constraint_pred = direction.argmax(dim=-1)  # (B, K)
+                    disagree_mask = (constraint_pred != model_pred.unsqueeze(1)).float()
+
+                    model_entropy = -(probs_live.detach() * (probs_live.detach() + 1e-8).log()).sum(dim=-1)
+                    max_entropy = 1.0986  # log(3) for 3 classes
+                    uncertainty = (model_entropy / max_entropy).clamp(0, 1).unsqueeze(1)  # (B, 1)
+
+                    weighted_kl = kl * fires_f * confidence_t * gate_weights * disagree_mask * uncertainty
                     per_sample_constraint = weighted_kl.sum(dim=-1)  # (B,)
                     loss_constraint = (lambda_per_sample * per_sample_constraint).mean()
 
@@ -675,6 +702,8 @@ def train_fever_veri(
                         epoch_total_samples += fires.numel()
                         epoch_lambda_sum += adaptive_out["lambda_per_sample"].sum().item()
                         epoch_lambda_count += adaptive_out["lambda_per_sample"].shape[0]
+                        n_disagree = (fires_f * disagree_mask).sum().item()
+                        epoch_disagree_fires += int(n_disagree)
                         gate_mean = adaptive_out["gate_weights"].mean(dim=0)  # (K,)
                         if epoch_gate_sum is None:
                             epoch_gate_sum = gate_mean.cpu()
@@ -798,15 +827,17 @@ def train_fever_veri(
 
         avg_loss = epoch_loss / max(1, n_steps)
         # Print constraint activity stats
-        if epoch_total_samples > 0 and phase >= 3:
+        if epoch_total_samples > 0 and sched_mult > 0:
             fire_rate = epoch_total_fires / max(1, epoch_total_samples)
             avg_lambda = epoch_lambda_sum / max(1, epoch_lambda_count)
+            disagree_rate = epoch_disagree_fires / max(1, epoch_total_fires)
             gate_str = ""
             if epoch_gate_sum is not None and n_steps > 0:
                 gate_avg = epoch_gate_sum / n_steps
                 gate_str = " gates=[" + ",".join(f"{g:.3f}" for g in gate_avg.tolist()) + "]"
             print(
                 f"  🔬 Constraint stats: fire_rate={fire_rate:.3f} "
+                f"disagree_rate={disagree_rate:.3f} "
                 f"avg_λ={avg_lambda:.4f}{gate_str}"
             )
         # End-of-epoch evaluation on full dev

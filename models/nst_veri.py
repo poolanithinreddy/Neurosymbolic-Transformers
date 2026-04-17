@@ -83,7 +83,7 @@ class NSTVeriModel(nn.Module):
         self,
         backbone: nn.Module,
         hidden_dim: int = 768,
-        n_constraints: int = 6,
+        n_constraints: int = 7,
         label_smoothing: float = 0.05,
         class_weights: Optional[torch.Tensor] = None,
         dropout: float = 0.1,
