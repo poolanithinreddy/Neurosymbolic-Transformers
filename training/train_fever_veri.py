@@ -884,8 +884,8 @@ def train_fever_veri(
     print("  Constraint calibration analysis")
     print(f"{'─'*40}")
     dev_claims = [it["claim"] for it in splits["dev"][:2000]]
-    dev_evidences = [it["evidence"] for it in splits["dev"][:2000]]
-    dev_labels_list = [it["label"] for it in splits["dev"][:2000]]
+    dev_evidences = [it["gold_evidence_text"] for it in splits["dev"][:2000]]
+    dev_labels_list = [it["label_id"] for it in splits["dev"][:2000]]
     calib_stats = calibrate_constraints(
         constraint_engine, dev_claims, dev_evidences, dev_labels_list, n_samples=2000,
     )

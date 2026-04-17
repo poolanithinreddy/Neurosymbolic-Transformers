@@ -208,15 +208,17 @@ class EntityOverlapConstraint:
         claim_entities = {w.lower() for w in re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', claim)}
         ev_entities = {w.lower() for w in re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', evidence)}
 
-        if not claim_entities:
+        if not claim_entities or len(claim_entities) < 2:
+            # Too few entities to draw meaningful conclusions
             return ConstraintSignal(
                 name="entity_overlap", fires=False, confidence=0.0,
                 direction=torch.tensor([0.33, 0.33, 0.34]),
             )
 
-        if not ev_entities:
+        if not ev_entities or not evidence.strip():
+            # No evidence text at all — strong NEI signal
             return ConstraintSignal(
-                name="entity_overlap", fires=True, confidence=0.6,
+                name="entity_overlap", fires=True, confidence=0.7,
                 direction=torch.tensor([0.05, 0.05, 0.90]),
                 explanation="no entities in evidence",
             )
@@ -224,18 +226,22 @@ class EntityOverlapConstraint:
         overlap = claim_entities & ev_entities
         overlap_ratio = len(overlap) / len(claim_entities)
 
-        if overlap_ratio < 0.2:
-            confidence = 0.6
-            direction = torch.tensor([0.05, 0.05, 0.90])
-        elif overlap_ratio < 0.5:
-            confidence = 0.4
-            direction = torch.tensor([0.15, 0.15, 0.70])
-        elif overlap_ratio > 0.8:
-            confidence = 0.35
-            direction = torch.tensor([0.50, 0.30, 0.20])
+        if overlap_ratio < 0.15:
+            # Very low overlap — likely irrelevant evidence
+            confidence = 0.55
+            direction = torch.tensor([0.10, 0.10, 0.80])
+        elif overlap_ratio < 0.4:
+            # Moderate — don't fire, too uncertain
+            return ConstraintSignal(
+                name="entity_overlap", fires=False, confidence=0.0,
+                direction=torch.tensor([0.33, 0.33, 0.34]),
+            )
         else:
-            confidence = 0.2
-            direction = torch.tensor([0.40, 0.35, 0.25])
+            # High overlap — evidence is relevant, but doesn't determine label
+            return ConstraintSignal(
+                name="entity_overlap", fires=False, confidence=0.0,
+                direction=torch.tensor([0.33, 0.33, 0.34]),
+            )
 
         return ConstraintSignal(
             name="entity_overlap",
@@ -258,26 +264,22 @@ class EvidenceSufficiencyConstraint:
         claim_words = len(claim.split())
 
         if ev_words == 0:
+            # Empty evidence — very strong NEI signal
             return ConstraintSignal(
-                name="sufficiency", fires=True, confidence=0.9,
+                name="sufficiency", fires=True, confidence=0.85,
                 direction=torch.tensor([0.03, 0.03, 0.94]),
                 explanation="empty evidence",
             )
 
-        if ev_words < 5:
+        if ev_words < 4:
+            # Very short evidence (likely just a title fallback)
             return ConstraintSignal(
-                name="sufficiency", fires=True, confidence=0.7,
-                direction=torch.tensor([0.05, 0.05, 0.90]),
+                name="sufficiency", fires=True, confidence=0.6,
+                direction=torch.tensor([0.08, 0.08, 0.84]),
                 explanation=f"very short evidence ({ev_words} words)",
             )
 
-        if ev_words < claim_words * 0.4:
-            return ConstraintSignal(
-                name="sufficiency", fires=True, confidence=0.45,
-                direction=torch.tensor([0.15, 0.15, 0.70]),
-                explanation=f"short evidence ({ev_words} vs {claim_words} claim words)",
-            )
-
+        # Don't fire for moderate or long evidence — too noisy
         return ConstraintSignal(
             name="sufficiency", fires=False, confidence=0.0,
             direction=torch.tensor([0.33, 0.33, 0.34]),
