@@ -91,8 +91,10 @@ def _concat_evidence_sentences(
                 # Look up actual sentence text from wiki pages
                 if wiki_page_map and wiki_title in wiki_page_map:
                     sents = wiki_page_map[wiki_title]
-                    if isinstance(sent_idx, int) and 0 <= sent_idx < len(sents):
-                        text = sents[sent_idx].strip()
+                    # sent_idx=-1 means page-level evidence; use sentence 0 (intro)
+                    effective_idx = sent_idx if isinstance(sent_idx, int) and sent_idx >= 0 else 0
+                    if effective_idx < len(sents):
+                        text = sents[effective_idx].strip()
                         if text:
                             pieces.append(text)
                             continue
@@ -313,8 +315,10 @@ def load_fever_splits(
                     seen.add(key)
                     if wiki_page_map and wiki_title in wiki_page_map:
                         sents = wiki_page_map[wiki_title]
-                        if isinstance(sent_idx, int) and 0 <= sent_idx < len(sents):
-                            text = sents[sent_idx].strip()
+                        # sent_idx=-1 means page-level evidence; use sentence 0 (intro)
+                        effective_idx = sent_idx if isinstance(sent_idx, int) and sent_idx >= 0 else 0
+                        if effective_idx < len(sents):
+                            text = sents[effective_idx].strip()
                             if text:
                                 pieces.append(text)
                                 continue
