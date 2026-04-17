@@ -282,7 +282,7 @@ def load_fever_splits(
                 entry["label_raw"] = row.get("label", "NOT ENOUGH INFO")
                 wiki_url = row.get("evidence_wiki_url", "")
                 sent_id = row.get("evidence_sentence_id", -1)
-                if wiki_url and sent_id >= 0:
+                if wiki_url:
                     entry["evidence_pieces"].append((wiki_url, sent_id))
 
             # Sort by id for determinism, then limit with shuffle
