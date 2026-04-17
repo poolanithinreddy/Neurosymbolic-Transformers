@@ -1,0 +1,52 @@
+# FEVER Gold — Neural Baseline 3K (A100, Fair Comparison)
+# Same DeBERTa-v3-large + LoRA as NST-VERI but NO constraints
+# For fair comparison: identical model, batch size, epochs, lr
+
+mode: "neural"
+device: "auto"
+seed: 42
+
+task: "fever"
+evidence_mode: "gold"
+
+io:
+  out_dir: "outputs_neural_3k"
+
+model:
+  name: "microsoft/deberta-v3-large"
+  num_labels: 3
+  label_smoothing: 0.02
+  dropout: 0.1
+  max_length: 384
+  use_lora: true
+  lora_rank: 16
+  lora_alpha: 32
+  gradient_checkpointing: true
+
+data:
+  evidence_mode: "gold"
+  max_train: 3000
+  max_dev: 1000
+  dev_sample: 500
+  dev_test_ratio: 0.1
+
+train:
+  epochs: 5
+  batch_size: 16
+  grad_accum_steps: 2
+  lr: 2.0e-5
+  lr_lora: 5.0e-4
+  warmup_ratio: 0.1
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  bf16: true
+  fp16: false
+  tf32: true
+  fused_optimizer: true
+  eval_every_steps: 50
+  patience: 50
+  num_workers: 2
+
+logic:
+  lambda: 0.0
+  constraint_weights: null

@@ -259,6 +259,7 @@ class NSTVeriModel(nn.Module):
                 log_probs_exp = (probs + 1e-8).log().unsqueeze(1).expand(-1, K, -1)
                 log_dir = (direction + 1e-8).log()
                 kl = (direction * (log_dir - log_probs_exp)).sum(dim=-1)  # (B, K)
+                kl = kl.clamp(max=10.0)  # Prevent huge gradients from bad constraints
 
                 weighted_kl = kl * fires * confidence_t * gate_weights  # (B, K)
                 per_sample_constraint = weighted_kl.sum(dim=-1)  # (B,)

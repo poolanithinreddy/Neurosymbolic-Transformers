@@ -351,6 +351,25 @@ def train_fever_veri(
     )
     print_fever_stats(splits)
 
+    # ── Evidence quality diagnostic ───────────────────────────
+    # Critical: if evidence is just page titles, NLI accuracy is capped at ~60-70%
+    train_items = splits["train"]
+    n_good_ev = sum(1 for it in train_items if len(it.get("gold_evidence_text", "")) > 30)
+    ev_pct = 100 * n_good_ev / max(1, len(train_items))
+    print(f"\n  Evidence quality: {n_good_ev}/{len(train_items)} ({ev_pct:.0f}%) have >30 char evidence")
+    if ev_pct < 40:
+        logger.warning(
+            "LOW EVIDENCE QUALITY: Only %.0f%% of training examples have real evidence text. "
+            "This will cap accuracy. Build wiki cache with: python main.py build-fever-wiki-cache",
+            ev_pct,
+        )
+    # Show 3 sample evidences for manual verification
+    for i in range(min(3, len(train_items))):
+        it = train_items[i]
+        ev = it.get("gold_evidence_text", "")[:120]
+        print(f"    [{i}] {it['label']}: {it['claim'][:60]}...")
+        print(f"         Evidence: {ev}")
+
     if evidence_mode == "gold":
         train_ds = FeverGoldDataset(splits["train"])
         dev_ds = FeverGoldDataset(splits["dev"])
@@ -403,6 +422,23 @@ def train_fever_veri(
 
     # Build constraint engine
     constraint_engine = ConstraintEngineV2()
+
+    # ── Constraint precision pre-check (on training data subsample) ──
+    # Measures how often each constraint's suggested direction matches gold labels.
+    # Low precision constraints add noise — warn the user.
+    _precal_n = min(2000, len(splits["train"]))
+    _precal_claims = [it["claim"] for it in splits["train"][:_precal_n]]
+    _precal_ev = [it["gold_evidence_text"] for it in splits["train"][:_precal_n]]
+    _precal_labels = [it["label_id"] for it in splits["train"][:_precal_n]]
+    _calib = calibrate_constraints(
+        constraint_engine, _precal_claims, _precal_ev, _precal_labels, n_samples=_precal_n,
+    )
+    print(f"\n  Constraint precision pre-check ({_precal_n} samples):")
+    for cname, cstats in _calib.items():
+        prec = cstats.get("precision", 0)
+        fr = cstats.get("fire_rate", 0)
+        tag = "OK" if prec >= 0.5 else "NOISY"
+        print(f"    {cname:<30} precision={prec:.3f} fire_rate={fr:.3f} [{tag}]")
 
     # Optional: focal loss
     focal_loss_fn = None
@@ -577,7 +613,7 @@ def train_fever_veri(
                 fires = constraint_signals["fires"].to(device).float()
                 confidence = constraint_signals["confidence"].to(device)
 
-                # Forward pass through NST-VERI
+                # Single forward pass through NST-VERI (no double forward)
                 result = model(
                     input_ids, attention_mask, labels,
                     constraint_signals=constraint_signals,
@@ -586,15 +622,15 @@ def train_fever_veri(
                     gamma=gamma_cur,
                 )
 
-                # Compute adaptive lambda if in phase 3
+                # Compute adaptive lambda + constraint loss WITHOUT second forward pass
                 adaptive_out = None
                 if phase >= 3 and sched_mult > 0:
                     B_cur = fires.shape[0]
                     K_cur = fires.shape[1]
                     if use_adaptive_lambda:
-                        probs = result["probs"].detach()
+                        probs_detached = result["probs"].detach()
                         adaptive_out = adaptive_lambda_mod(
-                            fires, confidence, probs,
+                            fires, confidence, probs_detached,
                             schedule_multiplier=sched_mult,
                         )
                     else:
@@ -605,14 +641,32 @@ def train_fever_veri(
                             ),
                             "gate_weights": torch.ones(B_cur, K_cur, device=device),
                         }
-                    # Recompute forward with constraint loss
-                    result = model(
-                        input_ids, attention_mask, labels,
-                        constraint_signals=constraint_signals,
-                        phase=phase,
-                        beta=beta_cur,
-                        gamma=gamma_cur,
-                        adaptive_lambda=adaptive_out,
+
+                    # Compute constraint loss from first forward pass (grad flows through probs)
+                    probs_live = result["probs"]  # WITH gradient for backbone learning
+                    gate_weights = adaptive_out["gate_weights"]
+                    lambda_per_sample = adaptive_out["lambda_per_sample"]
+
+                    direction = constraint_signals["direction"].to(device)
+                    fires_f = fires.float()
+                    confidence_t = constraint_signals["confidence"].to(device)
+
+                    log_probs_exp = (probs_live + 1e-8).log().unsqueeze(1).expand(-1, K_cur, -1)
+                    log_dir = (direction + 1e-8).log()
+                    kl = (direction * (log_dir - log_probs_exp)).sum(dim=-1)  # (B, K)
+                    kl = kl.clamp(max=10.0)  # Prevent huge gradients from bad constraints
+
+                    weighted_kl = kl * fires_f * confidence_t * gate_weights  # (B, K)
+                    per_sample_constraint = weighted_kl.sum(dim=-1)  # (B,)
+                    loss_constraint = (lambda_per_sample * per_sample_constraint).mean()
+
+                    # Update result with constraint loss (replaces zero placeholder)
+                    result["loss_constraint"] = loss_constraint
+                    result["loss"] = (
+                        result["loss_nli"]
+                        + beta_cur * result["loss_aux"]
+                        + gamma_cur * result["loss_contrastive"]
+                        + loss_constraint
                     )
 
                     # Track constraint activity

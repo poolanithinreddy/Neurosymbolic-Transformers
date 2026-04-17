@@ -1,0 +1,68 @@
+# FEVER Gold — NST-VERI 3K Rapid Iteration (A100 Optimized)
+# DeBERTa-v3-large + LoRA + 3-phase verification-enhanced training
+# Optimized for 3k training, designed for fast iteration on A100
+#
+# Changes from fever_veri_smoke_3k.yaml:
+#   - No focal loss (over-regularizes on small data)
+#   - Lower label smoothing (0.02 vs 0.05)
+#   - 5 epochs (more constraint exposure)
+#   - Higher lr for faster convergence on small data
+#   - Patience=50 (never early stop)
+
+mode: "veri"
+device: "auto"
+seed: 42
+
+task: "fever"
+evidence_mode: "gold"
+
+io:
+  out_dir: "outputs_veri_3k"
+
+model:
+  name: "microsoft/deberta-v3-large"
+  num_labels: 3
+  label_smoothing: 0.02
+  dropout: 0.1
+  max_length: 384
+  use_lora: true
+  lora_rank: 16
+  lora_alpha: 32
+  gradient_checkpointing: true
+
+data:
+  evidence_mode: "gold"
+  max_train: 3000
+  max_dev: 1000
+  dev_sample: 500
+  dev_test_ratio: 0.1
+
+train:
+  epochs: 5
+  batch_size: 16
+  grad_accum_steps: 2
+  lr: 2.0e-5
+  lr_lora: 5.0e-4
+  lr_heads: 1.0e-3
+  lr_gate: 3.0e-3
+  warmup_ratio: 0.1
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  bf16: true
+  fp16: false
+  tf32: true
+  torch_compile: false
+  fused_optimizer: true
+  eval_every_steps: 50
+  patience: 50
+  num_workers: 2
+  focal_loss: false
+  focal_gamma: 2.0
+
+veri:
+  n_constraints: 6
+  lambda_max: 1.5
+  contrastive_temperature: 0.07
+  beta_aux: 1.0
+  gamma_contrastive: 0.1
+  use_adaptive_lambda: true
