@@ -170,6 +170,10 @@ class FeverNLIWrapper(nn.Module):
         result = {"logits": logits, "probs": probs}
 
         if labels is not None:
+            # Ensure class-weight dtype matches logits (PyTorch 2.10 + gradient
+            # checkpointing can silently cast buffers to half).
+            if self.loss_fn.weight is not None and self.loss_fn.weight.dtype != logits.dtype:
+                self.loss_fn.weight = self.loss_fn.weight.to(logits.dtype)
             result["loss"] = self.loss_fn(logits, labels)
 
         return result
