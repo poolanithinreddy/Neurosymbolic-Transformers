@@ -98,17 +98,17 @@ class NumericalConstraint:
 
         if claim_only and not overlap:
             # All claim numbers absent from evidence — strong mismatch
-            confidence = min(0.7, 0.3 + 0.1 * len(claim_only))
-            direction = torch.tensor([0.10, 0.65, 0.25])
+            confidence = min(0.9, 0.5 + 0.15 * len(claim_only))
+            direction = torch.tensor([0.05, 0.85, 0.10])
         elif claim_only and overlap:
             # Mixed: partial match — some numbers match, some don't
             ratio = len(claim_only) / (len(claim_only) + len(overlap))
-            confidence = 0.2 + 0.3 * ratio
-            direction = torch.tensor([0.20, 0.50, 0.30])
+            confidence = 0.3 + 0.4 * ratio
+            direction = torch.tensor([0.10, 0.70, 0.20])
         elif overlap and not claim_only:
             # All claim numbers found in evidence — consistent
-            confidence = 0.35
-            direction = torch.tensor([0.50, 0.20, 0.30])
+            confidence = 0.5
+            direction = torch.tensor([0.65, 0.15, 0.20])
         else:
             confidence = 0.0
             direction = torch.tensor([0.33, 0.33, 0.34])
@@ -173,14 +173,14 @@ class NegationConstraint:
                 antonym_count += 1
 
         if polarity_mismatch and antonym_count > 0:
-            confidence = min(0.7, 0.4 + 0.1 * antonym_count)
-            direction = torch.tensor([0.10, 0.70, 0.20])
+            confidence = min(0.9, 0.5 + 0.15 * antonym_count)
+            direction = torch.tensor([0.05, 0.85, 0.10])
         elif polarity_mismatch:
-            confidence = 0.35
-            direction = torch.tensor([0.15, 0.60, 0.25])
+            confidence = 0.5
+            direction = torch.tensor([0.10, 0.75, 0.15])
         elif antonym_count > 0:
-            confidence = min(0.5, 0.2 + 0.1 * antonym_count)
-            direction = torch.tensor([0.15, 0.60, 0.25])
+            confidence = min(0.7, 0.3 + 0.15 * antonym_count)
+            direction = torch.tensor([0.10, 0.75, 0.15])
         else:
             return ConstraintSignal(
                 name="negation", fires=False, confidence=0.0,
@@ -216,8 +216,8 @@ class EntityOverlapConstraint:
 
         if not ev_entities:
             return ConstraintSignal(
-                name="entity_overlap", fires=True, confidence=0.45,
-                direction=torch.tensor([0.10, 0.10, 0.80]),
+                name="entity_overlap", fires=True, confidence=0.6,
+                direction=torch.tensor([0.05, 0.05, 0.90]),
                 explanation="no entities in evidence",
             )
 
@@ -225,17 +225,17 @@ class EntityOverlapConstraint:
         overlap_ratio = len(overlap) / len(claim_entities)
 
         if overlap_ratio < 0.2:
-            confidence = 0.5
-            direction = torch.tensor([0.10, 0.10, 0.80])
+            confidence = 0.6
+            direction = torch.tensor([0.05, 0.05, 0.90])
         elif overlap_ratio < 0.5:
-            confidence = 0.3
-            direction = torch.tensor([0.20, 0.20, 0.60])
+            confidence = 0.4
+            direction = torch.tensor([0.15, 0.15, 0.70])
         elif overlap_ratio > 0.8:
-            confidence = 0.25
-            direction = torch.tensor([0.40, 0.40, 0.20])
+            confidence = 0.35
+            direction = torch.tensor([0.50, 0.30, 0.20])
         else:
-            confidence = 0.15
-            direction = torch.tensor([0.35, 0.35, 0.30])
+            confidence = 0.2
+            direction = torch.tensor([0.40, 0.35, 0.25])
 
         return ConstraintSignal(
             name="entity_overlap",
@@ -259,22 +259,22 @@ class EvidenceSufficiencyConstraint:
 
         if ev_words == 0:
             return ConstraintSignal(
-                name="sufficiency", fires=True, confidence=0.8,
-                direction=torch.tensor([0.05, 0.05, 0.90]),
+                name="sufficiency", fires=True, confidence=0.9,
+                direction=torch.tensor([0.03, 0.03, 0.94]),
                 explanation="empty evidence",
             )
 
         if ev_words < 5:
             return ConstraintSignal(
-                name="sufficiency", fires=True, confidence=0.5,
-                direction=torch.tensor([0.10, 0.10, 0.80]),
+                name="sufficiency", fires=True, confidence=0.7,
+                direction=torch.tensor([0.05, 0.05, 0.90]),
                 explanation=f"very short evidence ({ev_words} words)",
             )
 
         if ev_words < claim_words * 0.4:
             return ConstraintSignal(
-                name="sufficiency", fires=True, confidence=0.3,
-                direction=torch.tensor([0.20, 0.20, 0.60]),
+                name="sufficiency", fires=True, confidence=0.45,
+                direction=torch.tensor([0.15, 0.15, 0.70]),
                 explanation=f"short evidence ({ev_words} vs {claim_words} claim words)",
             )
 
@@ -307,14 +307,14 @@ class TemporalConstraint:
         claim_only = claim_years - ev_years
 
         if claim_only and not overlap:
-            confidence = min(0.5, 0.2 + 0.1 * len(claim_only))
-            direction = torch.tensor([0.15, 0.55, 0.30])
+            confidence = min(0.7, 0.3 + 0.15 * len(claim_only))
+            direction = torch.tensor([0.10, 0.70, 0.20])
         elif claim_only and overlap:
-            confidence = 0.2
-            direction = torch.tensor([0.25, 0.45, 0.30])
-        else:
             confidence = 0.3
-            direction = torch.tensor([0.45, 0.25, 0.30])
+            direction = torch.tensor([0.20, 0.55, 0.25])
+        else:
+            confidence = 0.4
+            direction = torch.tensor([0.55, 0.20, 0.25])
 
         return ConstraintSignal(
             name="temporal",
@@ -353,8 +353,8 @@ class HedgeModalityConstraint:
         ev_definitive = ev_tokens & self.DEFINITIVE_WORDS
 
         if claim_hedges and ev_definitive:
-            confidence = min(0.3, 0.1 + 0.05 * (len(claim_hedges) + len(ev_definitive)))
-            direction = torch.tensor([0.25, 0.40, 0.35])
+            confidence = min(0.5, 0.2 + 0.08 * (len(claim_hedges) + len(ev_definitive)))
+            direction = torch.tensor([0.20, 0.45, 0.35])
             return ConstraintSignal(
                 name="hedge_modality", fires=True, confidence=confidence,
                 direction=direction,

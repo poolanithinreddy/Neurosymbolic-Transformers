@@ -74,10 +74,11 @@ class AdaptiveLambdaModule(nn.Module):
             nn.Sigmoid(),
         )
 
-        # Initialise to output near-zero (start unconstrained)
-        nn.init.constant_(self.lambda_net[-2].bias, -3.0)
-        # Gate starts at ~0.5 (neutral)
-        nn.init.constant_(self.gate_net[-2].bias, 0.0)
+        # Initialise to output moderate lambda from the start
+        # sigmoid(0.0) = 0.5, so lambda starts at ~0.5 * lambda_max
+        nn.init.constant_(self.lambda_net[-2].bias, 0.0)
+        # Gate starts at ~0.62 (slightly above neutral)
+        nn.init.constant_(self.gate_net[-2].bias, 0.5)
 
     def forward(
         self,

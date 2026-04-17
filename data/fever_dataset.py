@@ -283,10 +283,14 @@ def load_fever_splits(
                 if wiki_url and sent_id >= 0:
                     entry["evidence_pieces"].append((wiki_url, sent_id))
 
-            # Sort by id for determinism, then limit
+            # Sort by id for determinism, then limit with shuffle
             all_ids = sorted(grouped.keys())
             max_n = max_train if split_name == "train" else max_dev
             if max_n is not None and max_n < len(all_ids):
+                # Shuffle before slicing to avoid label-sorted bias
+                import random as _rng
+                rng = _rng.Random(seed)
+                rng.shuffle(all_ids)
                 all_ids = all_ids[:max_n]
 
             split_items = []
@@ -331,7 +335,12 @@ def load_fever_splits(
             # ── Nested format (original) ─────────────────────────
             max_n = max_train if split_name == "train" else max_dev
             if max_n is not None and max_n < len(data):
-                data = data.select(range(max_n))
+                # Shuffle indices before slicing to avoid label-sorted bias
+                import random as _rng
+                rng = _rng.Random(seed)
+                indices = list(range(len(data)))
+                rng.shuffle(indices)
+                data = data.select(indices[:max_n])
 
             split_wiki_map = wiki_page_map
 

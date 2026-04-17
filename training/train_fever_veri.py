@@ -48,7 +48,7 @@ from data.fever_dataset import (
 )
 from models.nst_veri import NSTVeriModel
 from models.fever_nli import build_fever_model
-from symbolic.constraints_v2 import ConstraintEngineV2
+from symbolic.constraints_v2 import ConstraintEngineV2, calibrate_constraints
 from training.adaptive_lambda import AdaptiveLambdaModule
 from eval.calibration_metrics import expected_calibration_error, brier_score
 from training.config_validation import load_and_validate_config
@@ -202,19 +202,19 @@ def _eval_split(model, dataloader, device):
 def _get_phase(epoch: int, total_epochs: int) -> int:
     """Determine training phase from epoch number.
 
-    Phase 1: first 20% of epochs (NLI + aux)
-    Phase 2: next 20% (+ contrastive)
-    Phase 3: remaining 60% (+ constraints with warmup)
+    Phase 1: epoch 0 only (NLI + aux warmup)
+    Phase 2: epoch 1 (+ contrastive)
+    Phase 3: epoch 2+ (+ constraints with warmup)
+
+    For very short training (<=2 epochs), skip directly to phase 3.
     """
     if total_epochs <= 2:
-        # Short training: simplified phases
         if epoch == 0:
             return 1
         return 3
-    frac = epoch / total_epochs
-    if frac < 0.2:
+    if epoch == 0:
         return 1
-    elif frac < 0.4:
+    if epoch == 1:
         return 2
     return 3
 
@@ -223,23 +223,21 @@ def _constraint_warmup(epoch: int, total_epochs: int) -> float:
     """Constraint weight warmup schedule for Phase 3.
 
     Returns multiplier in [0, 1] that ramps up constraint influence.
-    Uses (epoch - start + 1) so constraints are non-zero from the
-    first epoch of Phase 3 (previously: zero at phase start, which
-    caused early stopping before constraints activated).
+    Starts at 0.5 on first constraint epoch, ramps to 1.0 linearly.
     """
     phase = _get_phase(epoch, total_epochs)
     if phase < 3:
         return 0.0
-    # Linear warmup within phase 3, starting at a non-zero value
-    phase3_start = int(0.4 * total_epochs)
     if total_epochs <= 2:
         phase3_start = 1
+    else:
+        phase3_start = 2  # Constraints start at epoch 2
     phase3_len = total_epochs - phase3_start
     if phase3_len <= 0:
         return 1.0
-    # +1 so the first epoch of phase 3 gets a non-zero multiplier
-    progress = (epoch - phase3_start + 1) / phase3_len
-    return min(1.0, max(0.0, progress))
+    progress = (epoch - phase3_start) / max(1, phase3_len - 1)
+    # Start at 0.5, ramp to 1.0
+    return min(1.0, 0.5 + 0.5 * progress)
 
 
 def train_fever_veri(
@@ -554,6 +552,12 @@ def train_fever_veri(
         epoch_aux_loss = 0.0
         epoch_contrastive_loss = 0.0
         epoch_constraint_loss = 0.0
+        # Constraint activity tracking
+        epoch_total_fires = 0
+        epoch_total_samples = 0
+        epoch_lambda_sum = 0.0
+        epoch_lambda_count = 0
+        epoch_gate_sum = None
         n_steps = 0
         optimizer.zero_grad()
 
@@ -610,6 +614,18 @@ def train_fever_veri(
                         gamma=gamma_cur,
                         adaptive_lambda=adaptive_out,
                     )
+
+                    # Track constraint activity
+                    with torch.no_grad():
+                        epoch_total_fires += fires.sum().item()
+                        epoch_total_samples += fires.numel()
+                        epoch_lambda_sum += adaptive_out["lambda_per_sample"].sum().item()
+                        epoch_lambda_count += adaptive_out["lambda_per_sample"].shape[0]
+                        gate_mean = adaptive_out["gate_weights"].mean(dim=0)  # (K,)
+                        if epoch_gate_sum is None:
+                            epoch_gate_sum = gate_mean.cpu()
+                        else:
+                            epoch_gate_sum += gate_mean.cpu()
 
                 # Use focal loss if enabled (replaces the NLI loss component)
                 if use_focal and focal_loss_fn is not None:
@@ -668,6 +684,7 @@ def train_fever_veri(
                         f"cst={result.get('loss_constraint', torch.tensor(0.0)).item():.4f} "
                         f"| dev_acc={dev_acc:.4f} ECE={dev_metrics['ece']:.4f} "
                         f"res_scale={res_scale:.4f}"
+                        + (f" λ={adaptive_out['lambda_per_sample'].mean().item():.4f}" if adaptive_out is not None else "")
                     )
                     train_log.append({
                         "global_step": global_step,
@@ -683,6 +700,7 @@ def train_fever_veri(
                         "dev_brier": dev_metrics["brier"],
                         "residual_scale": round(res_scale, 4),
                         "schedule_multiplier": sched_mult,
+                        "mean_lambda": round(adaptive_out["lambda_per_sample"].mean().item(), 4) if adaptive_out is not None else 0.0,
                     })
 
                     if dev_acc > best_dev_acc:
@@ -725,6 +743,18 @@ def train_fever_veri(
             break
 
         avg_loss = epoch_loss / max(1, n_steps)
+        # Print constraint activity stats
+        if epoch_total_samples > 0 and phase >= 3:
+            fire_rate = epoch_total_fires / max(1, epoch_total_samples)
+            avg_lambda = epoch_lambda_sum / max(1, epoch_lambda_count)
+            gate_str = ""
+            if epoch_gate_sum is not None and n_steps > 0:
+                gate_avg = epoch_gate_sum / n_steps
+                gate_str = " gates=[" + ",".join(f"{g:.3f}" for g in gate_avg.tolist()) + "]"
+            print(
+                f"  🔬 Constraint stats: fire_rate={fire_rate:.3f} "
+                f"avg_λ={avg_lambda:.4f}{gate_str}"
+            )
         # End-of-epoch evaluation on full dev
         dev_metrics = _eval_split(model, dev_loader, device)
         dev_acc = dev_metrics["accuracy"]
@@ -794,6 +824,20 @@ def train_fever_veri(
             print(f"    {label}: acc={stats['accuracy']:.4f} (n={stats['count']})")
 
     # ── Build report ──────────────────────────────────────────
+
+    # Run constraint calibration on dev set
+    print(f"\n{'─'*40}")
+    print("  Constraint calibration analysis")
+    print(f"{'─'*40}")
+    dev_claims = [it["claim"] for it in splits["dev"][:2000]]
+    dev_evidences = [it["evidence"] for it in splits["dev"][:2000]]
+    dev_labels_list = [it["label"] for it in splits["dev"][:2000]]
+    calib_stats = calibrate_constraints(
+        constraint_engine, dev_claims, dev_evidences, dev_labels_list, n_samples=2000,
+    )
+    for cname, cstats in calib_stats.items():
+        print(f"    {cname}: precision={cstats['precision']:.3f} fire_rate={cstats['fire_rate']:.3f}")
+
     report = {
         "mode": "veri",
         "evidence_mode": evidence_mode,
@@ -820,6 +864,7 @@ def train_fever_veri(
         "dev_test": final_dev_test,
         "train_log": train_log,
         "temperature": round(optimal_T, 4),
+        "constraint_calibration": {k: {kk: round(vv, 4) if isinstance(vv, float) else vv for kk, vv in v.items()} for k, v in calib_stats.items()},
     }
 
     report_path = os.path.join(outdir, "report.json")

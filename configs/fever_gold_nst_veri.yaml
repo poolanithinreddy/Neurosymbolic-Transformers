@@ -33,13 +33,13 @@ data:
   dev_test_ratio: 0.1          # 10% held-out dev split
 
 train:
-  epochs: 5                    # 3 phases across 5 epochs
+  epochs: 8                    # More epochs: constraints need time to take effect
   batch_size: 16
   grad_accum_steps: 4          # effective batch = 64
   lr: 1.0e-5                   # backbone learning rate
   lr_lora: 3.0e-4              # LoRA adapters
   lr_heads: 5.0e-4             # verification + classification heads
-  lr_gate: 1.0e-3              # adaptive lambda gate
+  lr_gate: 2.0e-3              # adaptive lambda gate (higher: learn gating faster)
   warmup_ratio: 0.06
   weight_decay: 0.01
   max_grad_norm: 1.0
@@ -50,13 +50,15 @@ train:
   fused_optimizer: true
   eval_every_steps: 250
   eval_strategy: "steps"
-  patience: 10                  # Generous: allow constraints to ramp up in Phase 3
+  patience: 15                 # Very generous: never early-stop before constraints mature
   num_workers: 4
+  focal_loss: true             # Focus on hard examples (REFUTES/NEI boundary)
+  focal_gamma: 2.0
 
 # NST-VERI specific settings
 veri:
   n_constraints: 6             # 6 probabilistic constraints
-  lambda_max: 0.3              # Maximum constraint weight (at end of Phase 3)
+  lambda_max: 2.0              # Strong constraint weight (was 0.3 — too weak)
   contrastive_temperature: 0.07
 
 # Legacy constraint config (unused for veri mode, kept for compatibility)
