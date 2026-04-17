@@ -152,8 +152,12 @@ def _build_dataloader(
     )
 
 
-def _eval_split(model, dataloader, device):
-    """Evaluate model on a split. Returns accuracy, ECE, Brier, per-label metrics."""
+def _eval_split(model, dataloader, device, use_constraints=False):
+    """Evaluate model on a split. Returns accuracy, ECE, Brier, per-label metrics.
+
+    When use_constraints=True, passes claims/evidences to model.predict()
+    for inference-time constraint fusion (the neurosymbolic advantage).
+    """
     model.eval()
     all_probs, all_labels, all_preds = [], [], []
 
@@ -163,7 +167,12 @@ def _eval_split(model, dataloader, device):
             attention_mask = batch["attention_mask"].to(device)
             labels = batch["labels"].to(device)
 
-            result = model.predict(input_ids, attention_mask)
+            kwargs = {}
+            if use_constraints:
+                kwargs["claims"] = batch.get("claims")
+                kwargs["evidences"] = batch.get("evidences")
+
+            result = model.predict(input_ids, attention_mask, **kwargs)
             probs = result["probs"]
             preds = probs.argmax(dim=-1)
 
@@ -608,7 +617,6 @@ def train_fever_veri(
         epoch_lambda_sum = 0.0
         epoch_lambda_count = 0
         epoch_gate_sum = None
-        epoch_disagree_fires = 0
         n_steps = 0
         optimizer.zero_grad()
 
@@ -671,19 +679,10 @@ def train_fever_veri(
                     kl = (direction * (log_dir - log_probs_exp)).sum(dim=-1)  # (B, K)
                     kl = kl.clamp(max=10.0)  # Prevent huge gradients from bad constraints
 
-                    # Uncertainty-focused constraint application:
-                    # 1) Only nudge where constraint DISAGREES with model
-                    # 2) Weight by model uncertainty — focus on uncertain samples
-                    #    where constraints add most value
-                    model_pred = probs_live.detach().argmax(dim=-1)  # (B,)
-                    constraint_pred = direction.argmax(dim=-1)  # (B, K)
-                    disagree_mask = (constraint_pred != model_pred.unsqueeze(1)).float()
-
-                    model_entropy = -(probs_live.detach() * (probs_live.detach() + 1e-8).log()).sum(dim=-1)
-                    max_entropy = 1.0986  # log(3) for 3 classes
-                    uncertainty = (model_entropy / max_entropy).clamp(0, 1).unsqueeze(1)  # (B, 1)
-
-                    weighted_kl = kl * fires_f * confidence_t * gate_weights * disagree_mask * uncertainty
+                    # Direct constraint application: let constraints both reinforce
+                    # correct predictions and correct mistakes. Evidence gating in
+                    # evaluate_batch already ensures we only fire on real evidence.
+                    weighted_kl = kl * fires_f * confidence_t * gate_weights
                     per_sample_constraint = weighted_kl.sum(dim=-1)  # (B,)
                     loss_constraint = (lambda_per_sample * per_sample_constraint).mean()
 
@@ -702,8 +701,6 @@ def train_fever_veri(
                         epoch_total_samples += fires.numel()
                         epoch_lambda_sum += adaptive_out["lambda_per_sample"].sum().item()
                         epoch_lambda_count += adaptive_out["lambda_per_sample"].shape[0]
-                        n_disagree = (fires_f * disagree_mask).sum().item()
-                        epoch_disagree_fires += int(n_disagree)
                         gate_mean = adaptive_out["gate_weights"].mean(dim=0)  # (K,)
                         if epoch_gate_sum is None:
                             epoch_gate_sum = gate_mean.cpu()
@@ -830,14 +827,12 @@ def train_fever_veri(
         if epoch_total_samples > 0 and sched_mult > 0:
             fire_rate = epoch_total_fires / max(1, epoch_total_samples)
             avg_lambda = epoch_lambda_sum / max(1, epoch_lambda_count)
-            disagree_rate = epoch_disagree_fires / max(1, epoch_total_fires)
             gate_str = ""
             if epoch_gate_sum is not None and n_steps > 0:
                 gate_avg = epoch_gate_sum / n_steps
                 gate_str = " gates=[" + ",".join(f"{g:.3f}" for g in gate_avg.tolist()) + "]"
             print(
                 f"  🔬 Constraint stats: fire_rate={fire_rate:.3f} "
-                f"disagree_rate={disagree_rate:.3f} "
                 f"avg_λ={avg_lambda:.4f}{gate_str}"
             )
         # End-of-epoch evaluation on full dev
@@ -882,31 +877,51 @@ def train_fever_veri(
 
     # ── Final evaluation ──────────────────────────────────────
     print(f"\n{'─'*40}")
-    print("  Final evaluation on dev set")
+    print("  Final evaluation on dev set (RAW model)")
     print(f"{'─'*40}")
-    final_dev = _eval_split(model, dev_loader, device)
-    print(f"  Label Accuracy ({evidence_mode.upper()} evidence): {final_dev['accuracy']:.4f}")
+    final_dev_raw = _eval_split(model, dev_loader, device, use_constraints=False)
+    print(f"  Raw Accuracy ({evidence_mode.upper()} evidence): {final_dev_raw['accuracy']:.4f}")
+    print(f"  ECE: {final_dev_raw['ece']:.4f}")
+    print(f"  Brier: {final_dev_raw['brier']:.4f}")
+    for label, stats in final_dev_raw.get("per_label", {}).items():
+        print(f"    {label}: acc={stats['accuracy']:.4f} (n={stats['count']})")
+
+    print(f"\n{'─'*40}")
+    print("  Final evaluation on dev set (+ inference-time constraint fusion)")
+    print(f"{'─'*40}")
+    final_dev = _eval_split(model, dev_loader, device, use_constraints=True)
+    print(f"  Fused Accuracy ({evidence_mode.upper()} evidence): {final_dev['accuracy']:.4f}")
     print(f"  ECE: {final_dev['ece']:.4f}")
     print(f"  Brier: {final_dev['brier']:.4f}")
     for label, stats in final_dev.get("per_label", {}).items():
         print(f"    {label}: acc={stats['accuracy']:.4f} (n={stats['count']})")
+    delta_fuse = final_dev['accuracy'] - final_dev_raw['accuracy']
+    print(f"  Fusion delta: {delta_fuse:+.4f}")
 
     # Held-out dev_test
     final_dev_test = None
     if "dev_test" in splits and splits["dev_test"]:
         print(f"\n{'─'*40}")
-        print("  Final evaluation on held-out dev_test")
+        print("  Final evaluation on held-out dev_test (RAW)")
         print(f"{'─'*40}")
         dev_test_ds = FeverGoldDataset(splits["dev_test"])
         dev_test_loader = _build_dataloader(
             dev_test_ds, tokenizer, batch_size, max_length,
             shuffle=False, num_workers=num_workers, pin_memory=pin_memory, seed=seed,
         )
-        final_dev_test = _eval_split(model, dev_test_loader, device)
-        print(f"  Label Accuracy: {final_dev_test['accuracy']:.4f}")
+        final_dev_test_raw = _eval_split(model, dev_test_loader, device, use_constraints=False)
+        print(f"  Raw Accuracy: {final_dev_test_raw['accuracy']:.4f}")
+
+        print(f"\n{'─'*40}")
+        print("  Final evaluation on held-out dev_test (+ constraint fusion)")
+        print(f"{'─'*40}")
+        final_dev_test = _eval_split(model, dev_test_loader, device, use_constraints=True)
+        print(f"  Fused Accuracy: {final_dev_test['accuracy']:.4f}")
         print(f"  ECE: {final_dev_test['ece']:.4f}")
         for label, stats in final_dev_test.get("per_label", {}).items():
             print(f"    {label}: acc={stats['accuracy']:.4f} (n={stats['count']})")
+        delta_heldout = final_dev_test['accuracy'] - final_dev_test_raw['accuracy']
+        print(f"  Fusion delta: {delta_heldout:+.4f}")
 
     # ── Build report ──────────────────────────────────────────
 

@@ -282,14 +282,45 @@ class NSTVeriModel(nn.Module):
         self,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
+        claims: list[str] | None = None,
+        evidences: list[str] | None = None,
+        constraint_alpha: float = 0.2,
     ) -> dict[str, Any]:
-        """Inference: return predicted labels and probabilities."""
+        """Inference: return predicted labels and probabilities.
+
+        When claims and evidences are provided, applies inference-time
+        constraint fusion: blends model probabilities with high-precision
+        constraint directions for improved accuracy on well-evidenced examples.
+        """
         self.eval()
         hidden_state, main_logits = self._get_cls_hidden(input_ids, attention_mask)
         verif_out = self.verification(hidden_state)
         final_logits = main_logits + verif_out["logit_correction"]
         probs = F.softmax(final_logits, dim=-1)
-        pred_ids = final_logits.argmax(dim=-1)
+
+        # Inference-time constraint fusion
+        if claims is not None and evidences is not None:
+            from symbolic.constraints_v2 import ConstraintEngineV2
+            engine = ConstraintEngineV2()
+            signals = engine.evaluate_batch(claims, evidences)
+            fires = signals["fires"].to(probs.device).float()
+            conf = signals["confidence"].to(probs.device)
+            direction = signals["direction"].to(probs.device)
+
+            # Blend model probs with constraint directions for firing constraints
+            K = fires.shape[1]
+            total_correction = torch.zeros_like(probs)
+            for k in range(K):
+                mask_k = (fires[:, k] > 0.5) & (conf[:, k] > 0.3)
+                if mask_k.any():
+                    conf_k = conf[mask_k, k].unsqueeze(-1)  # (N, 1)
+                    dir_k = direction[mask_k, k]  # (N, 3)
+                    total_correction[mask_k] += constraint_alpha * conf_k * (dir_k - probs[mask_k])
+
+            probs = (probs + total_correction).clamp(min=1e-8)
+            probs = probs / probs.sum(dim=-1, keepdim=True)
+
+        pred_ids = probs.argmax(dim=-1)
 
         return {
             "logits": final_logits,

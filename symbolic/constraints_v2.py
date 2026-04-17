@@ -629,9 +629,17 @@ class ConstraintEngineV2:
         return [c(claim, evidence) for c in self.constraints]
 
     def evaluate_batch(
-        self, claims: list[str], evidences: list[str]
+        self, claims: list[str], evidences: list[str],
+        min_evidence_words: int = 8,
     ) -> dict[str, torch.Tensor]:
         """Evaluate all constraints on a batch.
+
+        Args:
+            claims: List of claim strings.
+            evidences: List of evidence strings.
+            min_evidence_words: Minimum evidence length (in words) to evaluate
+                constraints. Title-only evidence (< min_evidence_words words)
+                produces noisy constraint signals and is skipped entirely.
 
         Returns:
             fires:      (B, K) bool — does each constraint fire?
@@ -640,12 +648,20 @@ class ConstraintEngineV2:
         """
         B = len(claims)
         K = self.n_constraints
+        _uniform = torch.tensor([0.33, 0.33, 0.34])
 
         fires = torch.zeros(B, K, dtype=torch.bool)
         confidence = torch.zeros(B, K)
         direction = torch.zeros(B, K, 3)
 
         for i, (claim, evidence) in enumerate(zip(claims, evidences)):
+            # Evidence gate: title-only evidence produces noisy signals
+            ev_words = len(evidence.split()) if evidence else 0
+            if ev_words < min_evidence_words:
+                for k in range(K):
+                    direction[i, k] = _uniform
+                continue
+
             for k, constraint in enumerate(self.constraints):
                 signal = constraint(claim, evidence)
                 fires[i, k] = signal.fires
