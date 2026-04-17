@@ -42,7 +42,7 @@ train:
   warmup_ratio: 0.06
   weight_decay: 0.01
   max_grad_norm: 1.0
-  bf16: true
+  bf16: false
   fp16: false
   tf32: true
   torch_compile: false
