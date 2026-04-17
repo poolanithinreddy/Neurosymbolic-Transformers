@@ -84,6 +84,7 @@ def build_fever_model(
     model = AutoModelForSequenceClassification.from_pretrained(
         model_name,
         config=config,
+        torch_dtype=torch.float32,
     )
 
     # Gradient checkpointing (saves ~40% memory on large models)
