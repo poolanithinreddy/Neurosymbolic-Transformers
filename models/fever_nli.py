@@ -104,6 +104,7 @@ def build_fever_model(
                 lora_dropout=0.05,
                 target_modules=["query_proj", "key_proj", "value_proj", "dense"],
                 bias="none",
+                modules_to_save=["classifier", "pooler"],
             )
             model = get_peft_model(model, lora_config)
 
