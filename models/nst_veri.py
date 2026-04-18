@@ -310,13 +310,16 @@ class NSTVeriModel(nn.Module):
             # Blend model probs with constraint directions for firing constraints
             # Only use high-precision constraints (indices determined by calibration)
             # 0=Numerical(61%), 3=EvidenceSufficiency(76%), 4=Temporal(70%)
+            # Only fuse when model is uncertain (max_prob < 0.8)
             high_precision_k = {0, 3, 4}
             K = fires.shape[1]
+            max_prob = probs.max(dim=-1).values  # (B,)
+            uncertain = max_prob < 0.8  # only fuse for uncertain predictions
             total_correction = torch.zeros_like(probs)
             for k in range(K):
                 if k not in high_precision_k:
                     continue
-                mask_k = (fires[:, k] > 0.5) & (conf[:, k] > 0.6)
+                mask_k = (fires[:, k] > 0.5) & (conf[:, k] > 0.6) & uncertain
                 if mask_k.any():
                     conf_k = conf[mask_k, k].unsqueeze(-1)  # (N, 1)
                     dir_k = direction[mask_k, k]  # (N, 3)
