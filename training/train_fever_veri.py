@@ -512,7 +512,8 @@ def train_fever_veri(
             continue
         if "lora" in name.lower():
             lora_params.append(p)
-        elif any(h in name for h in ["verification", "contrastive", "residual"]):
+        elif any(h in name for h in ["verification", "contrastive", "residual",
+                                      "classifier", "pooler"]):
             head_params.append(p)
         else:
             backbone_params.append(p)

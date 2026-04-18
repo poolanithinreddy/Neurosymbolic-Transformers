@@ -34,15 +34,15 @@ train:
   epochs: 5
   batch_size: 32
   grad_accum_steps: 2
-  lr: 1.5e-5
-  lr_lora: 4.0e-4
+  lr: 3.0e-5
+  lr_lora: 8.0e-4
   warmup_ratio: 0.06
   weight_decay: 0.01
   max_grad_norm: 1.0
   bf16: false
   fp16: false
   tf32: true
-  fused_optimizer: true
+  fused_optimizer: false
   eval_every_steps: 100
   eval_strategy: "steps"
   patience: 10

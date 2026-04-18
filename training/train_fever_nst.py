@@ -462,23 +462,30 @@ def train_fever_nst(
         except Exception as e:
             logger.warning(f"torch.compile failed, using eager mode: {e}")
 
-    # Separate param groups: backbone at base lr, LoRA at higher lr, gate at highest
+    # Separate param groups: backbone at base lr, LoRA at higher lr,
+    # classifier/pooler at LoRA lr (randomly initialized, needs fast learning)
     backbone_params = []
     lora_params = []
+    head_params = []  # classifier + pooler (from modules_to_save)
     for name, p in model.named_parameters():
         if not p.requires_grad:
             continue
         if "lora" in name.lower():
             lora_params.append(p)
+        elif "classifier" in name.lower() or "pooler" in name.lower():
+            head_params.append(p)
         else:
             backbone_params.append(p)
 
     param_groups = []
     if backbone_params:
         param_groups.append({"params": backbone_params, "lr": lr, "name": "backbone"})
+    if head_params:
+        # Randomly initialized heads need higher LR (same as LoRA or higher)
+        param_groups.append({"params": head_params, "lr": lr_lora, "name": "head"})
     if lora_params:
         param_groups.append({"params": lora_params, "lr": lr_lora, "name": "lora"})
-    elif not backbone_params:
+    elif not backbone_params and not head_params:
         # Fallback: all params at base lr
         param_groups = [{"params": list(model.parameters()), "lr": lr}]
     if constraint_gate is not None:
