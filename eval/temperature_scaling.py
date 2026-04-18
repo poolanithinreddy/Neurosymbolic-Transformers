@@ -25,7 +25,7 @@ class TemperatureScaler(nn.Module):
     def __init__(self):
         super().__init__()
         # Initialise T = 1.0 (no scaling)
-        self.temperature = nn.Parameter(torch.ones(1) * 1.5)
+        self.temperature = nn.Parameter(torch.ones(1))
 
     def forward(self, logits: torch.Tensor) -> torch.Tensor:
         """Scale logits by learned temperature."""

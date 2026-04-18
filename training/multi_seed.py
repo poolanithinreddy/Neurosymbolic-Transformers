@@ -133,6 +133,12 @@ def _resolve_train_fn(task: str) -> Callable:
     elif task in ("train-fever-nst", "fever_nst", "fever"):
         from training.train_fever_nst import train_fever_nst
         return train_fever_nst
+    elif task in ("train-fever-veri", "fever_veri"):
+        from training.train_fever_veri import train_fever_veri
+        return train_fever_veri
+    elif task in ("train-fever-veri-v2", "fever_veri_v2"):
+        from training.train_fever_veri_v2 import train_fever_veri_v2
+        return train_fever_veri_v2
     else:
         raise ValueError(f"Unknown task: {task}")
 
