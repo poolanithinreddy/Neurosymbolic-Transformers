@@ -398,7 +398,93 @@ def load_fever_splits(
         h = _split_hash(items)
         logger.info(f"  {split_name} hash: {h}")
 
+    # ── Backfill NEI evidence from wiki cache ─────────────────
+    # NEI claims have no annotated evidence, creating a shortcut:
+    # model learns "evidence present → SUPPORTS, absent → NEI"
+    # Fix: retrieve relevant (but insufficient) evidence for NEI.
+    _backfill_nei_evidence(result, wiki_page_map)
+
     return result
+
+
+def _backfill_nei_evidence(
+    splits: dict[str, list[dict]],
+    wiki_page_map,
+) -> None:
+    """Add relevant evidence to NEI claims that lack it.
+
+    For each NEI claim without evidence, extracts candidate entity names
+    and looks them up in the wiki cache. Uses the first 2 sentences of the 
+    best matching page as evidence. This prevents the model from learning
+    the "evidence present → not NEI" shortcut.
+    """
+    if not wiki_page_map:
+        logger.warning("No wiki cache — cannot backfill NEI evidence")
+        return
+
+    # Build a set of all wiki titles for fast lookup
+    if hasattr(wiki_page_map, '_cache'):
+        titles_set = set(wiki_page_map._cache.titles())
+    elif hasattr(wiki_page_map, 'keys'):
+        titles_set = set(wiki_page_map.keys())
+    else:
+        return
+
+    # Preprocess titles for matching: title → normalized form
+    title_lower = {t.lower().replace("_", " "): t for t in titles_set}
+
+    total_backfilled = 0
+    for split_name, items in splits.items():
+        for item in items:
+            if item["label"] != "NOT ENOUGH INFO":
+                continue
+            if item.get("gold_evidence_text", "").strip():
+                continue  # already has evidence
+
+            # Try to find a matching wiki page for this claim
+            evidence = _find_nei_evidence(item["claim"], wiki_page_map, title_lower)
+            if evidence:
+                item["gold_evidence_text"] = evidence
+                total_backfilled += 1
+
+    if total_backfilled > 0:
+        logger.info(f"  Backfilled evidence for {total_backfilled} NEI claims")
+
+
+def _find_nei_evidence(
+    claim: str,
+    wiki_page_map,
+    title_lower: dict[str, str],
+) -> str:
+    """Find relevant evidence for a NEI claim by entity matching."""
+    claim_clean = claim.strip().rstrip(".")
+    words = claim_clean.split()
+
+    # Try n-grams from longest to shortest (prefer longer entity matches)
+    best_title = None
+    best_length = 0
+    for n in range(min(6, len(words)), 0, -1):
+        for i in range(len(words) - n + 1):
+            candidate = " ".join(words[i:i+n]).lower()
+            # Remove trailing punctuation
+            candidate = candidate.rstrip(".,;:!?")
+            if candidate in title_lower:
+                if n > best_length:
+                    best_title = title_lower[candidate]
+                    best_length = n
+        if best_title and best_length >= 2:
+            break  # Good enough match
+
+    if not best_title:
+        return ""
+
+    # Get first 2 sentences from the wiki page
+    sents = wiki_page_map.get(best_title)
+    if not sents:
+        return ""
+    # Use up to 2 non-empty sentences
+    result_sents = [s.strip() for s in sents[:3] if s.strip()][:2]
+    return " . ".join(result_sents) if result_sents else ""
 
 
 def _load_fever_local_fallback(cache_dir: str | None) -> dict[str, list[dict]]:
