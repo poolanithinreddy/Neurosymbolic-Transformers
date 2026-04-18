@@ -102,7 +102,7 @@ def build_fever_model(
                 r=lora_rank,
                 lora_alpha=lora_alpha,
                 lora_dropout=0.05,
-                target_modules=["query_proj", "key_proj", "value_proj", "dense"],
+                target_modules=["query_proj", "key_proj", "value_proj"],
                 bias="none",
                 modules_to_save=["classifier", "pooler"],
             )
