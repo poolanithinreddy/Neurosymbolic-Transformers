@@ -631,7 +631,7 @@ def train_fever_veri(
             with torch.amp.autocast(device, dtype=amp_dtype, enabled=use_amp):
                 # Extract constraint signals (CPU, no grad needed)
                 with torch.no_grad():
-                    constraint_signals = constraint_engine.evaluate_batch(claims, evidences)
+                    constraint_signals = constraint_engine.evaluate_batch(claims, evidences, min_evidence_words=2)
 
                 # Adaptive lambda computation (differentiable)
                 fires = constraint_signals["fires"].to(device).float()
