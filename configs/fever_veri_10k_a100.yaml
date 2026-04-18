@@ -51,7 +51,7 @@ train:
   eval_strategy: "steps"
   patience: 15
   num_workers: 4
-  focal_loss: true
+  focal_loss: false
   focal_gamma: 2.0
 
 veri:
