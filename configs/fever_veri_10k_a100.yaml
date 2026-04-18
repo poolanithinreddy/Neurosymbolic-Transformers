@@ -60,7 +60,7 @@ veri:
   contrastive_temperature: 0.07
   beta_aux: 0.3
   gamma_contrastive: 0.1
-  use_adaptive_lambda: true
+  use_adaptive_lambda: false
 
 logic:
   lambda: 0.0

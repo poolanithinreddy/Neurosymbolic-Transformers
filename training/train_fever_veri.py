@@ -675,6 +675,14 @@ def train_fever_veri(
                     fires_f = fires.float()
                     confidence_t = constraint_signals["confidence"].to(device)
 
+                    # Mask out low-precision constraints (only keep indices 0,3,4)
+                    # 0=Numerical(61%), 3=EvidenceSufficiency(76%), 4=Temporal(70%)
+                    high_prec_mask = torch.zeros(K_cur, device=device)
+                    for hp_k in (0, 3, 4):
+                        if hp_k < K_cur:
+                            high_prec_mask[hp_k] = 1.0
+                    fires_f = fires_f * high_prec_mask.unsqueeze(0)  # zero out bad constraints
+
                     log_probs_exp = (probs_live + 1e-8).log().unsqueeze(1).expand(-1, K_cur, -1)
                     log_dir = (direction + 1e-8).log()
                     kl = (direction * (log_dir - log_probs_exp)).sum(dim=-1)  # (B, K)
