@@ -284,7 +284,7 @@ class NSTVeriModel(nn.Module):
         attention_mask: torch.Tensor,
         claims: list[str] | None = None,
         evidences: list[str] | None = None,
-        constraint_alpha: float = 0.2,
+        constraint_alpha: float = 0.1,
     ) -> dict[str, Any]:
         """Inference: return predicted labels and probabilities.
 
@@ -316,7 +316,7 @@ class NSTVeriModel(nn.Module):
             for k in range(K):
                 if k not in high_precision_k:
                     continue
-                mask_k = (fires[:, k] > 0.5) & (conf[:, k] > 0.3)
+                mask_k = (fires[:, k] > 0.5) & (conf[:, k] > 0.6)
                 if mask_k.any():
                     conf_k = conf[mask_k, k].unsqueeze(-1)  # (N, 1)
                     dir_k = direction[mask_k, k]  # (N, 3)
