@@ -286,9 +286,10 @@ Available pair pool: no-carry ≈ 1,980, 1-carry ≈ 3,735, 2-carry ≈ 2,385.
 | Neural Baseline | DeBERTa-v3-base (184M) | 0.8378 | 0.0401 | 0.2395 | Full fine-tune, 3 epochs |
 | Neural Large | DeBERTa-v3-large + LoRA | — | — | — | **Fair baseline**: same backbone as VERI |
 | NST-VERI v1 | DeBERTa-v3-large + LoRA | 0.8384 | 0.0423 | 0.2369 | Bug: constraints never fired |
-| **NST-VERI v2** | DeBERTa-v3-large + LoRA | — | — | — | Fixed constraint warmup |
+| **NST-VERI v2** | DeBERTa-v3-base + LoRA | — | — | — | Learned multi-task, focal loss |
+| **NST-VERI v2 (large)** | DeBERTa-v3-large + LoRA | — | — | — | Full-data push |
 
-*Note: NST-VERI v1 results are effectively neural-only (constraint loss was always 0.0 due to a warmup scheduling bug). The bug was identified and fixed. NST-VERI v2 is the corrected run with non-zero constraint loss from Phase 3 start. Neural Large provides the fair same-backbone comparison.*
+*Note: NST-VERI v1 used heuristic constraints that never activated due to a warmup bug. NST-VERI v2 replaces the entire constraint mechanism with learned verification primitives: FocalCrossEntropy (REFUTES γ=3.0), separate AttentionPool per aux head, signal-only RecalibrationNetwork (7→32→3), symmetric R-Drop. Results pending A100 runs.*
 
 **Honesty policy**: Placeholders = not yet measured. We report exactly what the model produces, including negative results.
 
@@ -300,7 +301,14 @@ Available pair pool: no-carry ≈ 1,980, 1-carry ≈ 3,735, 2-carry ≈ 2,385.
 | REFUTES | 0.8197 | 0.7948 | -0.025 |
 | NOT ENOUGH INFO | 0.8256 | 0.8226 | -0.003 |
 
-*Key finding: NST-VERI v1 trades REFUTES accuracy for SUPPORTS accuracy, maintaining overall parity. Whether this trade is beneficial depends on application.*
+*Key finding: NST-VERI v1 trades REFUTES accuracy for SUPPORTS accuracy. The v2 redesign uses focal loss with higher gamma for REFUTES to address this bottleneck directly.*
+
+**NST-VERI v2 design rationale:**
+- v1's heuristic constraints suppressed REFUTES accuracy (−2.5%) while boosting SUPPORTS (+2.9%)
+- RecalibrationNetwork with 768-dim CLS input became a second classifier, defeating the purpose of learned correction
+- Aux heads shared the same CLS pooling as NLI head — no feature complementarity
+- R-Drop was asymmetric (only NLI loss averaged, not aux losses)
+- Temperature scaling had a T=1.5 initialization bug and was never applied at final evaluation
 
 ### 4.4 Ablations
 
@@ -453,6 +461,7 @@ python main.py multi-seed --task train-kinship-cegis --config configs/kinship_ce
 
 # FEVER (requires GPU and wiki cache)
 python main.py build-fever-wiki-cache
+python main.py multi-seed --task train-fever-veri-v2 --config configs/fever_veri_v2_10k_a100.yaml --seeds 42,43,44
 python main.py multi-seed --task train-fever-nst --config configs/fever_gold_nst_cegis.yaml --seeds 42,43,44
 
 # Tables and figures

@@ -116,8 +116,9 @@ def _eval_split(model, dataloader, device, use_symbolic=False, temperature=1.0):
 
             result = model.predict(input_ids, attention_mask, **kwargs)
 
-            # Apply temperature scaling if T != 1.0
-            if temperature != 1.0 and "logits" in result:
+            # Temperature scaling: apply to logits, then use result probs
+            # for symbolic fusion path (fusion already applied to probs).
+            if temperature != 1.0 and "logits" in result and not use_symbolic:
                 scaled_logits = result["logits"] / max(temperature, 0.01)
                 probs = F.softmax(scaled_logits, dim=-1)
             else:

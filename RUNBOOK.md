@@ -142,21 +142,34 @@ python main.py train-fever-nst --config configs/fever_gold_nst_cegis.yaml
 python main.py train-fever-nst --config configs/fever_gold_nst_gated.yaml
 ```
 
-### 6d. Multi-seed (for mean ± std)
+### 6d. NST-VERI v2 (flagship — learned multi-task)
 
 ```bash
+# 10K development loop (~20 min on A100)
+python main.py train-fever-veri-v2 --config configs/fever_veri_v2_10k_a100.yaml
+
+# Full data with DeBERTa-v3-large (~2h on A100)
+python main.py train-fever-veri-v2 --config configs/fever_veri_v2_full_a100.yaml
+```
+
+### 6e. Multi-seed (for mean ± std)
+
+```bash
+python main.py multi-seed --task train-fever-veri-v2 \
+    --config configs/fever_veri_v2_10k_a100.yaml --seeds 42,43,44
+
 python main.py multi-seed --task train-fever-nst \
     --config configs/fever_gold_nst_cegis.yaml --seeds 42,43,44
 ```
 
-### 6e. Setting B (Full Pipeline, Retrieved Evidence)
+### 6f. Setting B (Full Pipeline, Retrieved Evidence)
 
 ```bash
 python main.py train-fever-nst --config configs/fever_pipeline_neural.yaml
 python main.py train-fever-nst --config configs/fever_pipeline_nst_cegis.yaml
 ```
 
-### 6f. Evaluate a checkpoint
+### 6g. Evaluate a checkpoint
 
 ```bash
 python main.py eval-fever --ckpt outputs_fever_gold_neural/ckpt/best_model.pt

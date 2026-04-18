@@ -71,7 +71,8 @@
 | Lagrangian | Adaptive λ dual-variable constraints | `fever_gold_lagrangian.yaml` |
 | CEGIS | Counterexample-guided refinement | `fever_gold_nst_cegis.yaml` |
 | ECCG/Gated | Per-sample constraint gating | `fever_gold_nst_gated.yaml` |
-| **VERI** | **3-phase verification-enhanced (flagship)** | `fever_gold_nst_veri_a100.yaml` |
+| VERI v1 | 3-phase verification-enhanced | `fever_gold_nst_veri_a100.yaml` |
+| **VERI v2** | **Learned multi-task + focal loss (flagship)** | `fever_veri_v2_10k_a100.yaml` |
 
 ### Smoke Tests
 
@@ -123,28 +124,34 @@
 | Neural | `fever_pipeline_neural` | — | — | — |
 | CEGIS | `fever_pipeline_nst_cegis` | — | — | — |
 
-### NST-VERI Architecture
+### NST-VERI v2 Architecture
 
-The flagship model combines:
-1. **DeBERTa-v3-large backbone** with LoRA (r=16, α=32) — efficient fine-tuning
-2. **K=7 verification heads** — auxiliary binary classifiers bridging neural→symbolic
-3. **Residual correction** — zero-init logit adjustment from verification signals
-4. **Supervised contrastive head** — representation shaping via class prototypes
-5. **Adaptive per-sample λ** — learns when to trust constraints per example
-6. **Focal loss** — focuses training on hard REFUTES/NEI boundary cases
-7. **Constraint engine v2.1** — 7 high-precision probabilistic constraints:
-   - C1: Numerical discrepancy (shared-entity + quantity-context aware)
-   - C2: Negation mismatch (shared content + antonym pairs)
-   - C3: Entity overlap (dual-metric: entity + content word overlap)
-   - C4: Evidence sufficiency (empty/short evidence → NEI)
-   - C5: Temporal inconsistency (year/date conflict with shared entities)
-   - C6: Hedge/modality (speculative vs. definitive language)
-   - C7: Mutual exclusion (categorical "X is Y" vs "X is Z" conflicts)
+The flagship model replaces heuristic constraint integration with learned verification primitives:
 
-Training proceeds in 3 phases:
-- **Phase 1** (20% of epochs): NLI + auxiliary heads only
-- **Phase 2** (20%): + contrastive loss on high-confidence examples
-- **Phase 3** (60%): + uncertainty-focused constraint loss with curriculum warmup
+1. **DeBERTa-v3-base/large backbone** with LoRA (r=16, α=32) — efficient fine-tuning
+2. **FocalCrossEntropy** — per-class gamma with REFUTES γ=3.0 (addresses bottleneck class)
+3. **ContradictionHead** — separate AttentionPool over hidden states, learns entity-level contradiction patterns
+4. **EvidenceRelevanceHead** — separate AttentionPool, learns evidence sufficiency signals
+5. **RecalibrationNetwork** — signal-only 7→32→3 correction (NLI logits + aux probs + confidence + entropy)
+6. **Supervised contrastive** — class-prototype representation shaping
+7. **Symmetric R-Drop** — all losses (NLI + aux) averaged across both forward passes
+8. **Symbolic fusion** (inference-time) — optional constraint-based correction for uncertain predictions
+
+Key design principles:
+- Aux heads use **separate** attention pooling (learn different token patterns from CLS)
+- RecalibrationNetwork takes only **7-dim structured signals**, not raw 768-dim CLS features
+- Focal loss with **higher gamma for REFUTES** directly addresses the per-class accuracy bottleneck
+- Two-phase training: warmup (epochs 0–1, lower aux weights) → full multi-task (epochs 2+)
+
+### Changes from VERI v1
+- Removed: heuristic constraint engine at training time (noisy, suppressed REFUTES)
+- Removed: 768-dim CLS input to RecalibrationNetwork (became second classifier)
+- Removed: asymmetric R-Drop (only NLI loss was averaged)
+- Added: focal loss with per-class gamma
+- Added: separate AttentionPool per auxiliary head
+- Added: temperature scaling bug fix (T=1.5→1.0 initialization)
+- Added: NaN check before backward (not after)
+- Added: checkpoint resume support (saves optimizer/scheduler state)
 
 ---
 
@@ -154,14 +161,14 @@ Training proceeds in 3 phases:
 # Smoke test (verify pipeline works)
 python main.py train-fever-veri --config configs/fever_veri_smoke.yaml
 
-# Rapid development (10K subset, ~15 min GPU)
-python main.py train-fever-nst --config configs/fever_rapid_10k.yaml
+# NST-VERI v2 — 10K development loop (~20 min A100)
+python main.py train-fever-veri-v2 --config configs/fever_veri_v2_10k_a100.yaml
 
-# Full NST-VERI on A100
-python main.py train-fever-veri --config configs/fever_gold_nst_veri_a100.yaml
+# NST-VERI v2 — Full data with DeBERTa-v3-large (~2h A100)
+python main.py train-fever-veri-v2 --config configs/fever_veri_v2_full_a100.yaml
 
 # Evaluate checkpoint
-python eval/fever.py --ckpt outputs_fever_gold_nst_veri/ckpt --model_type veri
+python eval/fever.py --ckpt outputs_veri_v2_10k/ckpt --model_type veri
 ```
 
 ---

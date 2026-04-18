@@ -89,20 +89,21 @@ L(θ, λ) = L_task(θ) + λ·(L_logic(θ) − ε) + ρ/2·[max(0, L_logic(θ) �
 
 ```
 nst/
-├── main.py                 # Unified CLI (22 commands)
-├── configs/                # 25 YAML experiment configs
-├── models/                 # CNN perception, Transformer, neuro-symbolic wrappers
-├── training/               # Training loops, CEGIS, Lagrangian, baselines, multi-seed
+├── main.py                 # Unified CLI (24 commands)
+├── configs/                # 30+ YAML experiment configs
+├── models/                 # CNN perception, Transformer, NST-VERI v1/v2 models
+├── training/               # Training loops, CEGIS, Lagrangian, VERI v2, multi-seed
 ├── symbolic/               # Constraint loss, Lagrangian state, ECCG gate, rule engine
 ├── data/                   # Dataset generators (digit addition, kinship, CLUTRR, FEVER)
-├── eval/                   # Evaluation, calibration metrics, rule satisfaction, leakage checks
+├── eval/                   # Evaluation, calibration, temperature scaling, leakage checks
 ├── scripts/                # Benchmark, plots, table export, cleanup, smoke test
 ├── results/                # Results aggregation (LaTeX/Markdown table generation)
 ├── tests/                  # 233 unit tests
 ├── colab/                  # One-click Colab playbooks
 ├── PAPER.md                # Technical write-up
 ├── RUNBOOK.md              # FEVER experiment playbook
-└── RESULTS.md              # Results tracker
+├── RESULTS.md              # Results tracker
+└── CODE_REVIEW.md          # Codebase analysis and design decisions
 ```
 
 ---
@@ -216,6 +217,8 @@ make all-paper        # everything above
 | `multi-digit-stats` | Multi-digit dataset statistics |
 | `kinship-stats` | Kinship dataset statistics |
 | `train-fever-nst` | Train FEVER NLI with DeBERTa + NST constraints |
+| `train-fever-veri` | Train NST-VERI v1 (3-phase, heuristic constraints) |
+| `train-fever-veri-v2` | **Train NST-VERI v2** (learned multi-task, focal loss) |
 | `build-fever-wiki-cache` | Build SQLite wiki cache (avoids OOM) |
 | `fever-stats` | FEVER dataset statistics + split hashes |
 | `eval-fever` | Evaluate a FEVER NLI checkpoint |
@@ -245,6 +248,8 @@ make all-paper        # everything above
 | `fever_gold_nst_gated.yaml` | **ECCG** (gated constraints) | FEVER (Gold Evidence) |
 | `fever_gold_nst_veri.yaml` | **NST-VERI** (verification-enhanced) | FEVER (Gold Evidence) |
 | `fever_gold_nst_veri_a100.yaml` | **NST-VERI** (A100 optimized) | FEVER (Gold Evidence) |
+| `fever_veri_v2_10k_a100.yaml` | **NST-VERI v2** (10K, learned multi-task) | FEVER (Gold Evidence) |
+| `fever_veri_v2_full_a100.yaml` | **NST-VERI v2** (full data, DeBERTa-large) | FEVER (Gold Evidence) |
 | `fever_gold_smoke.yaml` | Smoke test (200 samples) | FEVER (Gold Evidence) |
 | `fever_micro_smoke.yaml` | Micro smoke (50 samples, tiny BERT) | FEVER |
 | `fever_pipeline_neural.yaml` | Pure neural baseline | FEVER (Full Pipeline) |
@@ -260,20 +265,20 @@ NST applies Neural CEGIS to the FEVER fact verification task, classifying claim�
 - **Setting A (Gold Evidence)**: oracle evidence → Label Accuracy. Isolates NLI capability.
 - **Setting B (Full Pipeline)**: BM25 retrieval → NLI → FEVER Score. End-to-end pipeline.
 
-**Architecture**: DeBERTa-v3-large (442M params, 7.1M trainable via LoRA r=16) with 7 probabilistic constraints + ECCG gating:
-- C1: Numerical discrepancy (shared-entity + quantity-context aware matching)
-- C2: Negation mismatch (shared content requirement + antonym pairs + polarity analysis)
-- C3: Entity overlap → NEI bias (dual-metric: entity + content word overlap)
-- C4: Evidence sufficiency → NEI bias (empty/short evidence)
-- C5: Temporal inconsistency (year/date mismatch with shared entity requirement)
-- C6: Hedge/modality mismatch (speculative claim vs. definitive evidence)
-- C7: Mutual exclusion (categorical "X is Y" vs "X is Z" conflicts)
+**Architecture**: DeBERTa-v3-base/large (184M–442M params, LoRA r=16) with learned multi-task verification:
 
-**NST-VERI training**: 3-phase protocol with uncertainty-focused constraint integration:
-- Phase 1 (epoch 0): NLI + aux heads + light constraints (5% weight)
-- Phase 2 (epoch 1): + contrastive loss + moderate constraints (20%)
-- Phase 3 (epochs 2+): constraint warmup 40% → 100%
-- Uncertainty-focused constraint loss: constraints primarily influence gradient when the model is **uncertain** AND the constraint **disagrees** with the model's prediction
+**NST-VERI v2** (current flagship) replaces heuristic constraint integration with learned verification primitives:
+- **FocalCrossEntropy**: Per-class gamma (REFUTES γ=3.0) to address the REFUTES accuracy bottleneck
+- **ContradictionHead**: Separate AttentionPool learning entity-level conflict patterns (silver label: REFUTES→1)
+- **EvidenceRelevanceHead**: Separate AttentionPool learning evidence sufficiency (silver label: NEI→0)
+- **RecalibrationNetwork**: Signal-only correction (7-dim input: NLI logits + aux probs + confidence + entropy), not a second classifier
+- **Supervised Contrastive**: Class-prototype contrastive learning for representation shaping
+- **Symmetric R-Drop**: Bidirectional KL with all losses averaged across both forward passes
+- **Symbolic Fusion** (inference-time): Optional constraint-based logit correction for uncertain predictions
+
+Training uses a two-phase schedule:
+- **Phase 1** (epochs 0–1): NLI warmup with low-weight auxiliary heads
+- **Phase 2** (epochs 2+): Full multi-task with R-Drop, contrastive, and ramped auxiliary weights
 
 ```bash
 # Build wiki cache (one-time, ~4 min, ~25 MB SQLite)
@@ -282,12 +287,18 @@ python main.py build-fever-wiki-cache
 # FEVER smoke test (tiny BERT, 50 samples, <2 min on CPU)
 python main.py train-fever-nst --config configs/fever_micro_smoke.yaml
 
+# NST-VERI v2 — 10K development loop (A100, ~20 min)
+python main.py train-fever-veri-v2 --config configs/fever_veri_v2_10k_a100.yaml
+
+# NST-VERI v2 — Full data with DeBERTa-v3-large (A100, ~2h)
+python main.py train-fever-veri-v2 --config configs/fever_veri_v2_full_a100.yaml
+
 # Full training — NST-CEGIS (requires GPU, ~3h on T4)
 python main.py train-fever-nst --config configs/fever_gold_nst_cegis.yaml
 
 # Multi-seed for error bars
-python main.py multi-seed --task train-fever-nst \
-    --config configs/fever_gold_nst_cegis.yaml --seeds 42,43,44
+python main.py multi-seed --task train-fever-veri-v2 \
+    --config configs/fever_veri_v2_10k_a100.yaml --seeds 42,43,44
 
 # Evaluate a checkpoint
 python main.py eval-fever --ckpt outputs_fever_gold_neural/ckpt/best_model.pt
