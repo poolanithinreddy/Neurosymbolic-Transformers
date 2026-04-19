@@ -1,0 +1,56 @@
+# FEVER Gold — NST v3 10K (A100)
+# Same architecture as neural baseline (DeBERTa-v3-base + LoRA)
+# Changes: Focal loss + R-Drop + symbolic inference boost
+# NO extra model parameters, NO auxiliary heads
+
+mode: "v3"
+device: "auto"
+seed: 42
+
+task: "fever"
+evidence_mode: "gold"
+
+io:
+  out_dir: "outputs_v3_10k"
+
+model:
+  name: "microsoft/deberta-v3-base"
+  num_labels: 3
+  label_smoothing: 0.02
+  dropout: 0.1
+  max_length: 384
+  use_lora: true
+  lora_rank: 16
+  lora_alpha: 32
+  gradient_checkpointing: true
+
+data:
+  evidence_mode: "gold"
+  max_train: 12000
+  max_dev: 3000
+  dev_test_ratio: 0.1
+
+train:
+  epochs: 8
+  batch_size: 32
+  grad_accum_steps: 2
+  lr: 2.0e-5
+  lr_lora: 5.0e-4
+  warmup_ratio: 0.06
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  tf32: true
+  eval_every_steps: 100
+  patience: 10
+  num_workers: 4
+
+v3:
+  focal_gamma: 2.0
+  refutes_gamma: 3.0
+  supports_gamma: 1.5
+  nei_gamma: 0.5
+  rdrop_alpha: 1.0
+  rdrop_warmup_epochs: 1
+  symbolic_boost_strength: 1.0
+  use_symbolic_boost: true
+  refutes_weight_mult: 1.5

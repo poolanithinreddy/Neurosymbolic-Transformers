@@ -90,6 +90,12 @@ def cmd_train_fever_veri_v2(args):
     train_fever_veri_v2(args.config, outdir_override=args.outdir)
 
 
+def cmd_train_fever_v3(args):
+    """Train NST v3: focal loss + R-Drop + symbolic inference boost."""
+    from training.train_fever_v3 import train_fever_v3
+    train_fever_v3(args.config, outdir_override=args.outdir)
+
+
 def cmd_pretrain_mnli(args):
     """Pre-fine-tune DeBERTa on MNLI for FEVER."""
     from training.pretrain_mnli import pretrain_mnli
@@ -508,6 +514,12 @@ def main():
     p_veri2.add_argument("--config", required=True, help="YAML config path")
     p_veri2.add_argument("--outdir", default=None)
 
+    # train-fever-v3 (NST v3: focal + R-Drop + symbolic boost)
+    p_v3 = subparsers.add_parser("train-fever-v3",
+                                  help="Train NST v3: focal loss + R-Drop + symbolic boost")
+    p_v3.add_argument("--config", required=True, help="YAML config path")
+    p_v3.add_argument("--outdir", default=None)
+
     # pretrain-mnli
     p_mnli = subparsers.add_parser("pretrain-mnli",
                                     help="Pre-fine-tune DeBERTa on MNLI for FEVER")
@@ -591,7 +603,7 @@ def main():
                          choices=["train", "train-kinship", "train-multi-digit",
                                   "train-cegis", "train-kinship-cegis",
                                   "train-fever-nst", "train-fever-veri",
-                                  "train-fever-veri-v2"])
+                                  "train-fever-veri-v2", "train-fever-v3"])
     p_mseed.add_argument("--config", required=True, help="YAML config path")
     p_mseed.add_argument("--seeds", default="42,43,44", help="Comma-separated seeds")
     p_mseed.add_argument("--outdir", default=None, help="Base output directory")
@@ -656,6 +668,7 @@ def main():
         "train-fever-nst": cmd_train_fever_nst,
         "train-fever-veri": cmd_train_fever_veri,
         "train-fever-veri-v2": cmd_train_fever_veri_v2,
+        "train-fever-v3": cmd_train_fever_v3,
         "pretrain-mnli": cmd_pretrain_mnli,
         "leakage-check": cmd_leakage_check,
         "fever-stats": cmd_fever_stats,
